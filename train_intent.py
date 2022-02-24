@@ -5,10 +5,14 @@ from pathlib import Path
 from typing import Dict
 
 import torch
+from torch.utils.data import DataLoader
 from tqdm import trange
 
 from dataset import SeqClsDataset
 from utils import Vocab
+from model import SeqClassifier
+
+from tqdm.auto import tqdm
 
 TRAIN = "train"
 DEV = "eval"
@@ -29,19 +33,78 @@ def main(args):
         for split, split_data in data.items()
     }
     # TODO: crecate DataLoader for train / dev datasets
+    train_loader = DataLoader(datasets[TRAIN], batch_size=args.batch_size, collate_fn=datasets[TRAIN].collate_fn, shuffle=True, drop_last=True)
+    dev_loader = DataLoader(datasets[DEV], batch_size=args.batch_size, collate_fn=datasets[DEV].collate_fn, shuffle=True)
 
     embeddings = torch.load(args.cache_dir / "embeddings.pt")
     # TODO: init model and move model to target device(cpu / gpu)
-    model = None
+    model = SeqClassifier(embeddings, args.hidden_size, args.num_layers, args.dropout, True, datasets[TRAIN].num_classes, args.batch_size).to(device=args.device)
+    # model = None
 
     # TODO: init optimizer
-    optimizer = None
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    #optimizer = None
+
+    # TRY: lr_scheduler
+    # lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    #     optimizer, 
+    #     mode="min",
+    # )
+
+    criterion = torch.nn.CrossEntropyLoss(reduction='mean')
+    best_loss = float("inf")
 
     epoch_pbar = trange(args.num_epoch, desc="Epoch")
     for epoch in epoch_pbar:
         # TODO: Training loop - iterate over train dataloader and update model weights
+        model.train()
+
+        train_total = 0
+        train_acc = 0
+        tqdm_object = tqdm(train_loader, total=len(train_loader))
+
+        for batch in tqdm_object:
+            # logits.shape = [batch_size, num_classes] 
+            logits = model(batch['encoded_text'].to(device=args.device))    
+            # target,shape = [batch_size]
+            target = batch['label'].to(device=args.device)
+            
+            # TODO: Do something to logits
+            optimizer.zero_grad()
+            loss = criterion(logits, target)    
+            loss.backward()
+            optimizer.step()
+
+            train_total += batch['encoded_text'].size(0)
+            train_acc += (logits.argmax(dim=-1).to("cpu") == target.to("cpu")).sum().item()
+
+            tqdm_object.set_postfix(train_loss=loss.item(), train_acc=train_acc/train_total)
+        
         # TODO: Evaluation loop - calculate accuracy and save model weights
-        pass
+        model.eval()
+
+        val_total = 0
+        val_acc = 0
+        tqdm_object = tqdm(dev_loader, total=len(dev_loader))
+
+        valid_losses = []
+        with torch.no_grad():
+            for batch in tqdm_object:
+                logits = model(batch['encoded_text'].to(device=args.device))
+                target = batch['label'].to(device=args.device)
+
+                loss = criterion(logits, target)
+
+                val_total += batch['encoded_text'].size(0)
+                val_acc += (logits.argmax(dim=-1).to("cpu") == target.to("cpu")).sum().item()
+
+                valid_losses.append(loss.item())
+                tqdm_object.set_postfix(valid_loss=loss.item(), valid_acc=val_acc/val_total)
+
+        valid_loss = sum(valid_losses) / len(valid_losses)
+        if valid_loss < best_loss:
+            best_loss = valid_loss
+            torch.save(model.state_dict(), args.ckpt_dir + 'model.pt')
 
     # TODO: Inference on test set
 

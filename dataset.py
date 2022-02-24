@@ -4,6 +4,7 @@ from torch.utils.data import Dataset
 
 from utils import Vocab
 
+import torch
 
 class SeqClsDataset(Dataset):
     def __init__(
@@ -32,7 +33,18 @@ class SeqClsDataset(Dataset):
 
     def collate_fn(self, samples: List[Dict]) -> Dict:
         # TODO: implement collate_fn
-        raise NotImplementedError
+        # Make use of vocab
+        # for sample in samples
+        #   sample = ['text': ..., 'intent': ..., 'id': ...]
+        text = [sample['text'].split() for sample in samples]
+        encoded_text = torch.tensor(self.vocab.encode_batch(text, self.max_len))
+        label = torch.tensor([ self.label_mapping[ sample['intent'] ] for sample in samples])
+        return {
+            'encoded_text': encoded_text,
+            'label': label,
+            'id': [sample['id'] for sample in samples]
+        }
+        # raise NotImplementedError
 
     def label2idx(self, label: str):
         return self.label_mapping[label]
