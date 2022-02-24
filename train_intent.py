@@ -54,6 +54,8 @@ def main(args):
 
     criterion = torch.nn.CrossEntropyLoss(reduction='mean')
     best_loss = float("inf")
+    args.checkpoint_name = "b%dl%.0e.pt"%(args.batch_size, args.lr)
+    print(f'checkpoint_name: {args.checkpoint_name}')
 
     epoch_pbar = trange(args.num_epoch, desc="Epoch")
     for epoch in epoch_pbar:
@@ -146,7 +148,7 @@ def parse_args() -> Namespace:
 
     # data loader
     parser.add_argument("--batch_size", type=int, default=128)
-    parser.add_argument("--num_workers", type=int, default=2)
+    parser.add_argument("--num_workers", type=int, default=4)
 
     # training
     parser.add_argument(
