@@ -10,6 +10,7 @@ from dataset import SeqClsDataset
 from model import SeqClassifier
 from utils import Vocab
 
+import pandas as pd
 
 def main(args):
     with open(args.cache_dir / "vocab.pkl", "rb") as f:
@@ -21,6 +22,7 @@ def main(args):
     data = json.loads(args.test_file.read_text())
     dataset = SeqClsDataset(data, vocab, intent2idx, args.max_len)
     # TODO: crecate DataLoader for test dataset
+    test_loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=dataset.collate_fn, num_workers=args.num_workers)
 
     embeddings = torch.load(args.cache_dir / "embeddings.pt")
 
@@ -36,10 +38,29 @@ def main(args):
 
     ckpt = torch.load(args.ckpt_path)
     # load weights into model
+    model.load_state_dict(ckpt)
 
     # TODO: predict dataset
+    model.eval()
+    tqdm_object = tqdm(test_loader, total=len(test_loader))
+    
+    test_intents = []
+    test_ids = []
+
+    with torch.no_grad():
+        for batch in tqdm_object:
+            logits = model(batch['encoded_text'].to(device=args.device))
+            intent_ids = logits.argmax(dim=-1)
+            intents = [dataset.idx2label(intent_id) for intent_id in intent_ids]
+            test_intents.extend(intents)
+            test_ids.extend(batch['id'])
+
 
     # TODO: write prediction to file (args.pred_file)
+    tmp = pd.DataFrame({"id": test_ids, "intent": test_intents})
+    print("Save csv ...")
+    tmp.to_csv(args.test_file, index=False)
+    print("Finish Predicting")
 
 
 def parse_args() -> Namespace:
@@ -75,6 +96,7 @@ def parse_args() -> Namespace:
 
     # data loader
     parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--num_workers", type=int, default=2)
 
     parser.add_argument(
         "--device", type=torch.device, help="cpu, cuda, cuda:0, cuda:1", default="cpu"

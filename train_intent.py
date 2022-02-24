@@ -33,8 +33,8 @@ def main(args):
         for split, split_data in data.items()
     }
     # TODO: crecate DataLoader for train / dev datasets
-    train_loader = DataLoader(datasets[TRAIN], batch_size=args.batch_size, collate_fn=datasets[TRAIN].collate_fn, shuffle=True, drop_last=True)
-    dev_loader = DataLoader(datasets[DEV], batch_size=args.batch_size, collate_fn=datasets[DEV].collate_fn, shuffle=True)
+    train_loader = DataLoader(datasets[TRAIN], batch_size=args.batch_size, collate_fn=datasets[TRAIN].collate_fn, shuffle=True, num_workers=args.num_workers)
+    dev_loader = DataLoader(datasets[DEV], batch_size=args.batch_size, collate_fn=datasets[DEV].collate_fn, num_workers=args.num_workers)
 
     embeddings = torch.load(args.cache_dir / "embeddings.pt")
     # TODO: init model and move model to target device(cpu / gpu)
@@ -104,7 +104,8 @@ def main(args):
         valid_loss = sum(valid_losses) / len(valid_losses)
         if valid_loss < best_loss:
             best_loss = valid_loss
-            torch.save(model.state_dict(), args.ckpt_dir + 'model.pt')
+            print(f'Save model. epoch: {epoch} valid_loss: {valid_loss} valid_acc: {val_acc/val_total}')
+            torch.save(model.state_dict(), os.path.join(args.ckpt_dir, args.checkpoint_name))
 
     # TODO: Inference on test set
 
@@ -144,12 +145,14 @@ def parse_args() -> Namespace:
 
     # data loader
     parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--num_workers", type=int, default=2)
 
     # training
     parser.add_argument(
         "--device", type=torch.device, help="cpu, cuda, cuda:0, cuda:1", default="cpu"
     )
     parser.add_argument("--num_epoch", type=int, default=100)
+    parser.add_argument("--checkpoint_name", type=int, default='model.pt')
 
     args = parser.parse_args()
     return args
