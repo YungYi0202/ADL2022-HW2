@@ -13,6 +13,7 @@ from utils import Vocab
 from model import SeqClassifier
 
 from tqdm.auto import tqdm
+import os
 
 TRAIN = "train"
 DEV = "eval"
