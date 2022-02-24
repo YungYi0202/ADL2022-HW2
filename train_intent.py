@@ -152,7 +152,7 @@ def parse_args() -> Namespace:
         "--device", type=torch.device, help="cpu, cuda, cuda:0, cuda:1", default="cpu"
     )
     parser.add_argument("--num_epoch", type=int, default=100)
-    parser.add_argument("--checkpoint_name", type=int, default='model.pt')
+    parser.add_argument("--checkpoint_name", type=str, default='model.pt')
 
     args = parser.parse_args()
     return args
