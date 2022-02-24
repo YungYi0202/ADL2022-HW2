@@ -12,8 +12,7 @@ class SeqClassifier(torch.nn.Module):
         num_layers: int,
         dropout: float,
         bidirectional: bool,
-        num_class: int,
-        batch_size: int
+        num_class: int
     ) -> None:
         super(SeqClassifier, self).__init__()
         self.embed = Embedding.from_pretrained(embeddings, freeze=False)
