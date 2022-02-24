@@ -19,7 +19,8 @@ class SeqClassifier(torch.nn.Module):
         # TODO: model architecture
         self.D = 2 if bidirectional==True else 1
         self.embedding_dim = embeddings.size(1)
-        self.rnn = torch.nn.RNN(self.embedding_dim, hidden_size, num_layers, dropout=dropout, bidirectional=bidirectional, batch_first=True)
+        # self.rnn = torch.nn.RNN(self.embedding_dim, hidden_size, num_layers, dropout=dropout, bidirectional=bidirectional, batch_first=True)
+        self.lstm = torch.nn.LSTM(self.embedding_dim, hidden_size, num_layers, dropout=dropout, bidirectional=bidirectional, batch_first=True)
         self.fc_layers = torch.nn.Sequential(
             torch.nn.Linear(self.D * hidden_size, 256),
             torch.nn.BatchNorm1d(256),
@@ -35,7 +36,7 @@ class SeqClassifier(torch.nn.Module):
     def forward(self, batch) -> Dict[str, torch.Tensor]:
         # TODO: implement model forward
         batch = self.embed(batch)
-        batch, _ = self.rnn(batch, None)
+        batch, _ = self.lstm(batch, None)
         batch = batch[:,-1,:]
         batch = self.fc_layers(batch)
         return batch
