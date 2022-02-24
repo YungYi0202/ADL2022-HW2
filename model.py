@@ -23,9 +23,8 @@ class SeqClassifier(torch.nn.Module):
         self.lstm = torch.nn.LSTM(self.embedding_dim, hidden_size, num_layers, dropout=dropout, bidirectional=bidirectional, batch_first=True)
         self.fc_layers = torch.nn.Sequential(
             torch.nn.Linear(self.D * hidden_size, 256),
-            torch.nn.BatchNorm1d(256),
-            torch.nn.ReLU(inplace=True),
-            torch.nn.Linear(256, num_class)
+            torch.nn.Sigmoid(),
+            torch.nn.Linear(256, num_class),
         )
 
     @property

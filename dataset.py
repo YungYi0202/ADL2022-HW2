@@ -37,7 +37,7 @@ class SeqClsDataset(Dataset):
         # for sample in samples
         #   sample = ['text': ..., 'intent': ..., 'id': ...]
         text = [sample['text'].split() for sample in samples]
-        encoded_text = torch.tensor(self.vocab.encode_batch(text, self.max_len))
+        encoded_text = torch.tensor(self.vocab.encode_batch(text))
         label = torch.tensor([ self.label_mapping[ sample['intent'] ] for sample in samples])
         return {
             'encoded_text': encoded_text,
