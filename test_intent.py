@@ -6,7 +6,7 @@ from typing import Dict
 
 import torch
 
-from dataset import SeqClsDataset
+from intent_dataset import SeqClsDataset
 from model import SeqClassifier
 from utils import Vocab
 
@@ -23,7 +23,7 @@ def main(args):
     data = json.loads(args.test_file.read_text())
     dataset = SeqClsDataset(data, vocab, intent2idx, args.max_len)
     # TODO: crecate DataLoader for test dataset
-    test_loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=dataset.collate_fn_intent_test, num_workers=args.num_workers)
+    test_loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=dataset.collate_fn_test, num_workers=args.num_workers)
 
     embeddings = torch.load(args.cache_dir / "embeddings.pt")
 

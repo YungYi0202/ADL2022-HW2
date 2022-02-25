@@ -8,7 +8,7 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import trange
 
-from dataset import SeqClsDataset
+from intent_dataset import SeqClsDataset
 from utils import Vocab
 from model import SeqClassifier
 
@@ -34,8 +34,8 @@ def main(args):
         for split, split_data in data.items()
     }
     # TODO: crecate DataLoader for train / dev datasets
-    train_loader = DataLoader(datasets[TRAIN], batch_size=args.batch_size, collate_fn=datasets[TRAIN].collate_fn_intent, shuffle=True, num_workers=args.num_workers)
-    dev_loader = DataLoader(datasets[DEV], batch_size=args.batch_size, collate_fn=datasets[DEV].collate_fn_intent, num_workers=args.num_workers)
+    train_loader = DataLoader(datasets[TRAIN], batch_size=args.batch_size, collate_fn=datasets[TRAIN].collate_fn, shuffle=True, num_workers=args.num_workers)
+    dev_loader = DataLoader(datasets[DEV], batch_size=args.batch_size, collate_fn=datasets[DEV].collate_fn, num_workers=args.num_workers)
 
     embeddings = torch.load(args.cache_dir / "embeddings.pt")
     # TODO: init model and move model to target device(cpu / gpu)

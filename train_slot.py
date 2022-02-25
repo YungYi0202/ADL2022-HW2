@@ -8,7 +8,7 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import trange
 
-from dataset import SeqClsDataset
+from slot_dataset import SeqClsDataset
 from utils import Vocab
 from model import SeqSlotClassifier
 
@@ -34,8 +34,8 @@ def main(args):
         for split, split_data in data.items()
     }
     # TODO: crecate DataLoader for train / dev datasets
-    train_loader = DataLoader(datasets[TRAIN], batch_size=args.batch_size, collate_fn=datasets[TRAIN].collate_fn_slot, shuffle=True, num_workers=args.num_workers)
-    dev_loader = DataLoader(datasets[DEV], batch_size=args.batch_size, collate_fn=datasets[DEV].collate_fn_slot, num_workers=args.num_workers)
+    train_loader = DataLoader(datasets[TRAIN], batch_size=args.batch_size, collate_fn=datasets[TRAIN].collate_fn, shuffle=True, num_workers=args.num_workers)
+    dev_loader = DataLoader(datasets[DEV], batch_size=args.batch_size, collate_fn=datasets[DEV].collate_fn, num_workers=args.num_workers)
 
     embeddings = torch.load(args.cache_dir / "embeddings.pt")
     # TODO: init model and move model to target device(cpu / gpu)
@@ -69,16 +69,17 @@ def main(args):
         for batch in tqdm_object:
             logits = model(batch['encoded_tokens'].to(device=args.device)) 
             # logits.shape = [batch_size, seq_len, num_classes]   
-            
-            logits_for_loss = logits.transpose(1, 2)
-            # logits_for_loss.shape = [batch_size, num_classes, seq_len] 
 
             target = batch['labels'].to(device=args.device)
             # target,shape = [batch_size, seq_len]
-            
+            print("logits & target.shape")
+            print(logits.shape)
+            print(target.shape)
+
             # TODO: Do something to logits
             optimizer.zero_grad()
-            loss = criterion(logits_for_loss, target)    
+            #loss = criterion(logits.view(-1, datasets[TRAIN].num_classes), target.view(-1))    
+            loss = criterion(logits.transpose(1,2), target)    
             loss.backward()
             optimizer.step()
 
@@ -89,11 +90,10 @@ def main(args):
             for i in range(batch_size):
                 pred = logits[i].argmax(dim=-1).to("cpu")[:lengths[i]]
                 label = target[i].to("cpu")[:lengths[i]]
-                correct_cnt = (pred == label).sum().item()
                 # if (i == 0):
                 #     print(pred)
                 #     print(label)
-                if correct_cnt == lengths[i]:
+                if (pred == label).sum().item() == lengths[i]:
                     # if (i==0):
                     #     print("match")
                     train_acc += 1 
@@ -111,10 +111,9 @@ def main(args):
         with torch.no_grad():
             for batch in tqdm_object:
                 logits = model(batch['encoded_tokens'].to(device=args.device)) 
-                logits_for_loss = logits.transpose(1, 2)
                 target = batch['labels'].to(device=args.device)
 
-                loss = criterion(logits, target)
+                loss = criterion(logits.view(-1, datasets[TRAIN].num_classes), target.view(-1))    
 
                 lengths = batch['lengths']
                 batch_size = len(lengths)
@@ -161,7 +160,7 @@ def parse_args() -> Namespace:
     )
 
     # data
-    parser.add_argument("--max_len", type=int, default=128)
+    parser.add_argument("--max_len", type=int, default=64)
 
     # model
     parser.add_argument("--hidden_size", type=int, default=512)
