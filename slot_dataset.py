@@ -20,7 +20,7 @@ class SeqClsDataset(Dataset):
         self._idx2label = {idx: intent for intent, idx in self.label_mapping.items()}
         self.max_len = max_len
         self.PAD = "PAD"
-        self.label_mapping[self.PAD]=len(self.label_mapping)
+        self.label_mapping[self.PAD]= 9
 
     def __len__(self) -> int:
         return len(self.data)
@@ -47,6 +47,7 @@ class SeqClsDataset(Dataset):
         # labels.shape = [samples.size[0], seq_len]
         labels = pad_to_len(labels, encoded_tokens.shape[1], self.label_mapping[self.PAD])
         labels = torch.tensor(labels)
+        
         return {
             'encoded_tokens': encoded_tokens,
             'labels': labels,

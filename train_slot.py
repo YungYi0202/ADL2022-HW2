@@ -54,10 +54,12 @@ def main(args):
 
     criterion = torch.nn.CrossEntropyLoss(reduction='mean')
     best_loss = float("inf")
+    best_acc = 0.0
     args.checkpoint_name = "b%dl%.0e.pt"%(args.batch_size, args.lr)
     print(f'checkpoint_name: {args.checkpoint_name}')
 
     epoch_pbar = trange(args.num_epoch, desc="Epoch")
+    
     for epoch in epoch_pbar:
         # TODO: Training loop - iterate over train dataloader and update model weights
         model.train()
@@ -72,14 +74,10 @@ def main(args):
 
             target = batch['labels'].to(device=args.device)
             # target,shape = [batch_size, seq_len]
-            print("logits & target.shape")
-            print(logits.shape)
-            print(target.shape)
 
             # TODO: Do something to logits
             optimizer.zero_grad()
-            #loss = criterion(logits.view(-1, datasets[TRAIN].num_classes), target.view(-1))    
-            loss = criterion(logits.transpose(1,2), target)    
+            loss = criterion(logits.view(-1, datasets[TRAIN].num_classes), target.view(-1))      
             loss.backward()
             optimizer.step()
 
@@ -132,6 +130,12 @@ def main(args):
         valid_loss = sum(valid_losses) / len(valid_losses)
         if valid_loss < best_loss:
             best_loss = valid_loss
+            if val_acc/val_total > best_acc:
+                best_acc = val_acc/val_total
+            print(f'Save model. epoch: {epoch} valid_loss: {valid_loss} valid_acc: {val_acc/val_total}')
+            torch.save(model.state_dict(), os.path.join(args.ckpt_dir, args.checkpoint_name))
+        elif val_acc/val_total > best_acc:
+            best_acc = val_acc/val_total
             print(f'Save model. epoch: {epoch} valid_loss: {valid_loss} valid_acc: {val_acc/val_total}')
             torch.save(model.state_dict(), os.path.join(args.ckpt_dir, args.checkpoint_name))
 
