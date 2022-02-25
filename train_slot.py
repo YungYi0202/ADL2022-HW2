@@ -10,7 +10,7 @@ from tqdm import trange
 
 from dataset import SeqClsDataset
 from utils import Vocab
-from model import SeqClassifier
+from model import SeqSlotClassifier
 
 from tqdm.auto import tqdm
 import os
@@ -24,22 +24,22 @@ def main(args):
     with open(args.cache_dir / "vocab.pkl", "rb") as f:
         vocab: Vocab = pickle.load(f)
 
-    intent_idx_path = args.cache_dir / "intent2idx.json"
-    intent2idx: Dict[str, int] = json.loads(intent_idx_path.read_text())
+    tag_idx_path = args.cache_dir / "tag2idx.json"
+    tag2idx: Dict[str, int] = json.loads(tag_idx_path.read_text())
 
     data_paths = {split: args.data_dir / f"{split}.json" for split in SPLITS}
     data = {split: json.loads(path.read_text()) for split, path in data_paths.items()}
     datasets: Dict[str, SeqClsDataset] = {
-        split: SeqClsDataset(split_data, vocab, intent2idx, args.max_len)
+        split: SeqClsDataset(split_data, vocab, tag2idx, args.max_len)
         for split, split_data in data.items()
     }
     # TODO: crecate DataLoader for train / dev datasets
-    train_loader = DataLoader(datasets[TRAIN], batch_size=args.batch_size, collate_fn=datasets[TRAIN].collate_fn_intent, shuffle=True, num_workers=args.num_workers)
-    dev_loader = DataLoader(datasets[DEV], batch_size=args.batch_size, collate_fn=datasets[DEV].collate_fn_intent, num_workers=args.num_workers)
+    train_loader = DataLoader(datasets[TRAIN], batch_size=args.batch_size, collate_fn=datasets[TRAIN].collate_fn_slot, shuffle=True, num_workers=args.num_workers)
+    dev_loader = DataLoader(datasets[DEV], batch_size=args.batch_size, collate_fn=datasets[DEV].collate_fn_slot, num_workers=args.num_workers)
 
     embeddings = torch.load(args.cache_dir / "embeddings.pt")
     # TODO: init model and move model to target device(cpu / gpu)
-    model = SeqClassifier(embeddings, args.hidden_size, args.num_layers, args.dropout, True, datasets[TRAIN].num_classes).to(device=args.device)
+    model = SeqSlotClassifier(embeddings, args.hidden_size, args.num_layers, args.dropout, True, datasets[TRAIN].num_classes).to(device=args.device)
     # model = None
 
     # TODO: init optimizer
@@ -49,9 +49,7 @@ def main(args):
     # TRY: lr_scheduler
     # lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
     #     optimizer, 
-    #     mode='min',
-    #     patience=10,
-    #     factor=0.8
+    #     mode="min",
     # )
 
     criterion = torch.nn.CrossEntropyLoss(reduction='mean')
@@ -69,19 +67,36 @@ def main(args):
         tqdm_object = tqdm(train_loader, total=len(train_loader))
 
         for batch in tqdm_object:
-            # logits.shape = [batch_size, num_classes] 
-            logits = model(batch['encoded_text'].to(device=args.device))    
-            # target,shape = [batch_size]
-            target = batch['label'].to(device=args.device)
+            logits = model(batch['encoded_tokens'].to(device=args.device)) 
+            # logits.shape = [batch_size, seq_len, num_classes]   
+            
+            logits_for_loss = logits.transpose(1, 2)
+            # logits_for_loss.shape = [batch_size, num_classes, seq_len] 
+
+            target = batch['labels'].to(device=args.device)
+            # target,shape = [batch_size, seq_len]
             
             # TODO: Do something to logits
             optimizer.zero_grad()
-            loss = criterion(logits, target)    
+            loss = criterion(logits_for_loss, target)    
             loss.backward()
             optimizer.step()
 
-            train_total += batch['encoded_text'].size(0)
-            train_acc += (logits.argmax(dim=-1).to("cpu") == target.to("cpu")).sum().item()
+            lengths = batch['lengths']
+            batch_size = len(lengths)
+            train_total += batch_size
+
+            for i in range(batch_size):
+                pred = logits[i].argmax(dim=-1).to("cpu")[:lengths[i]]
+                label = target[i].to("cpu")[:lengths[i]]
+                correct_cnt = (pred == label).sum().item()
+                # if (i == 0):
+                #     print(pred)
+                #     print(label)
+                if correct_cnt == lengths[i]:
+                    # if (i==0):
+                    #     print("match")
+                    train_acc += 1 
 
             tqdm_object.set_postfix(train_loss=loss.item(), train_acc=train_acc/train_total)
         
@@ -95,13 +110,22 @@ def main(args):
         valid_losses = []
         with torch.no_grad():
             for batch in tqdm_object:
-                logits = model(batch['encoded_text'].to(device=args.device))
-                target = batch['label'].to(device=args.device)
+                logits = model(batch['encoded_tokens'].to(device=args.device)) 
+                logits_for_loss = logits.transpose(1, 2)
+                target = batch['labels'].to(device=args.device)
 
                 loss = criterion(logits, target)
 
-                val_total += batch['encoded_text'].size(0)
-                val_acc += (logits.argmax(dim=-1).to("cpu") == target.to("cpu")).sum().item()
+                lengths = batch['lengths']
+                batch_size = len(lengths)
+                val_total += batch_size
+
+                for i in range(batch_size):
+                    pred = logits[i].argmax(dim=-1).to("cpu")[:lengths[i]]
+                    label = target[i].to("cpu")[:lengths[i]]
+                    correct_cnt = (pred == label).sum().item()
+                    if correct_cnt == lengths[i]:
+                        val_acc += 1 
 
                 valid_losses.append(loss.item())
                 tqdm_object.set_postfix(valid_loss=loss.item(), valid_acc=val_acc/val_total)
@@ -121,19 +145,19 @@ def parse_args() -> Namespace:
         "--data_dir",
         type=Path,
         help="Directory to the dataset.",
-        default="./data/intent/",
+        default="./data/slot/",
     )
     parser.add_argument(
         "--cache_dir",
         type=Path,
         help="Directory to the preprocessed caches.",
-        default="./cache/intent/",
+        default="./cache/slot/",
     )
     parser.add_argument(
         "--ckpt_dir",
         type=Path,
         help="Directory to save the model file.",
-        default="./ckpt/intent/",
+        default="./ckpt/slot/",
     )
 
     # data
@@ -150,7 +174,7 @@ def parse_args() -> Namespace:
 
     # data loader
     parser.add_argument("--batch_size", type=int, default=128)
-    parser.add_argument("--num_workers", type=int, default=2)
+    parser.add_argument("--num_workers", type=int, default=4)
 
     # training
     parser.add_argument(
