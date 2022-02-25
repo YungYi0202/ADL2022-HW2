@@ -55,6 +55,14 @@ class SeqClsDataset(Dataset):
         }
 
     def collate_fn_test(self, samples: List[Dict]) -> Dict:
+        tokens = [sample['tokens'] for sample in samples]
+        lengths = [len(token) for token in tokens]
+        encoded_tokens = torch.tensor(self.vocab.encode_batch(tokens))
+        return {
+            'encoded_tokens': encoded_tokens,
+            'id': [sample['id'] for sample in samples],
+            'lengths': lengths
+        }
         raise NotImplementedError
 
 

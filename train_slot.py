@@ -39,7 +39,7 @@ def main(args):
 
     embeddings = torch.load(args.cache_dir / "embeddings.pt")
     # TODO: init model and move model to target device(cpu / gpu)
-    model = SeqSlotClassifier(embeddings, args.hidden_size, args.num_layers, args.dropout, True, datasets[TRAIN].num_classes).to(device=args.device)
+    model = SeqSlotClassifier(embeddings, args.hidden_size, args.num_layers, args.dropout, args.bidirectional, datasets[TRAIN].num_classes).to(device=args.device)
     # model = None
 
     # TODO: init optimizer
@@ -140,6 +140,7 @@ def main(args):
             torch.save(model.state_dict(), os.path.join(args.ckpt_dir, args.checkpoint_name))
 
     # TODO: Inference on test set
+    print(f'checkpoint_name: {args.checkpoint_name}')
 
 
 def parse_args() -> Namespace:
