@@ -31,6 +31,10 @@ class SeqClassifier(torch.nn.Module):
             torch.nn.BatchNorm1d(hidden_size2),
             torch.nn.Sigmoid(),
 
+            torch.nn.Linear(hidden_size2, hidden_size2),
+            torch.nn.BatchNorm1d(hidden_size2),
+            torch.nn.Sigmoid(),
+
             torch.nn.Linear(hidden_size2, num_class),
         )
 

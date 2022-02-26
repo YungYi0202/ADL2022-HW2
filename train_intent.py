@@ -49,7 +49,8 @@ def main(args):
     # TRY: lr_scheduler
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, 
-        mode='min'
+        mode='min',
+        factor=args.factor,
     )
 
     criterion = torch.nn.CrossEntropyLoss(reduction='mean')
@@ -119,6 +120,7 @@ def main(args):
             torch.save(model.state_dict(), os.path.join(args.ckpt_dir, args.checkpoint_name))
 
     # TODO: Inference on test set
+    print(f'checkpoint_name: {args.checkpoint_name}')
 
 
 def parse_args() -> Namespace:
@@ -164,6 +166,9 @@ def parse_args() -> Namespace:
     )
     parser.add_argument("--num_epoch", type=int, default=100)
     parser.add_argument("--checkpoint_name", type=str, default='model.pt')
+
+    #lr_scheduler
+    parser.add_argument("--factor", type=float, default=0.1)
 
     args = parser.parse_args()
     return args
