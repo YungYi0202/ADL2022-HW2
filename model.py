@@ -72,14 +72,11 @@ class SeqSlotClassifier(torch.nn.Module):
         self.fc_layers = torch.nn.Sequential(
             torch.nn.Linear(D * hidden_size, hidden_size),
             torch.nn.Sigmoid(),
-            
+
             torch.nn.Linear(hidden_size, hidden_size2),
             torch.nn.Sigmoid(),
 
-            torch.nn.Linear(hidden_size2, hidden_size3),
-            torch.nn.Sigmoid(),
-
-            torch.nn.Linear(hidden_size3, num_class),
+            torch.nn.Linear(hidden_size2, num_class),
         )
 
     def forward(self, batch) -> Dict[str, torch.Tensor]:

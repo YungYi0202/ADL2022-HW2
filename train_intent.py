@@ -47,15 +47,14 @@ def main(args):
     #optimizer = None
 
     # TRY: lr_scheduler
-    # lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    #     optimizer, 
-    #     mode='min',
-    #     patience=10,
-    #     factor=0.8
-    # )
+    lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, 
+        mode='min'
+    )
 
     criterion = torch.nn.CrossEntropyLoss(reduction='mean')
     best_loss = float("inf")
+    best_acc = 0.0
     args.checkpoint_name = "b%dl%.0e.pt"%(args.batch_size, args.lr)
     print(f'checkpoint_name: {args.checkpoint_name}')
 
@@ -107,8 +106,15 @@ def main(args):
                 tqdm_object.set_postfix(valid_loss=loss.item(), valid_acc=val_acc/val_total)
 
         valid_loss = sum(valid_losses) / len(valid_losses)
+        lr_scheduler.step(valid_loss)
         if valid_loss < best_loss:
             best_loss = valid_loss
+            if val_acc/val_total > best_acc:
+                best_acc = val_acc/val_total
+            print(f'Save model. epoch: {epoch} valid_loss: {valid_loss} valid_acc: {val_acc/val_total}')
+            torch.save(model.state_dict(), os.path.join(args.ckpt_dir, args.checkpoint_name))
+        elif val_acc/val_total > best_acc:
+            best_acc = val_acc/val_total
             print(f'Save model. epoch: {epoch} valid_loss: {valid_loss} valid_acc: {val_acc/val_total}')
             torch.save(model.state_dict(), os.path.join(args.ckpt_dir, args.checkpoint_name))
 
