@@ -47,10 +47,10 @@ def main(args):
     #optimizer = None
 
     # TRY: lr_scheduler
-    # lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    #     optimizer, 
-    #     mode="min",
-    # )
+    lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, 
+        mode="min",
+    )
 
     criterion = torch.nn.CrossEntropyLoss(reduction='mean')
     best_loss = float("inf")
@@ -128,6 +128,7 @@ def main(args):
                 tqdm_object.set_postfix(valid_loss=loss.item(), valid_acc=val_acc/val_total)
 
         valid_loss = sum(valid_losses) / len(valid_losses)
+        lr_scheduler.step(valid_loss)
         if valid_loss < best_loss:
             best_loss = valid_loss
             if val_acc/val_total > best_acc:
