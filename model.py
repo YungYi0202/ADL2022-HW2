@@ -67,10 +67,19 @@ class SeqSlotClassifier(torch.nn.Module):
         self.embedding_dim = embeddings.size(1)
         # self.rnn = torch.nn.RNN(self.embedding_dim, hidden_size, num_layers, dropout=dropout, bidirectional=bidirectional, batch_first=True)
         self.lstm = torch.nn.LSTM(self.embedding_dim, hidden_size, num_layers, dropout=dropout, bidirectional=bidirectional, batch_first=True)
+        hidden_size2 = int(hidden_size/2)
+        hidden_size3 = int(hidden_size2/4)
         self.fc_layers = torch.nn.Sequential(
-            torch.nn.Linear(D * hidden_size, 256),
+            torch.nn.Linear(D * hidden_size, hidden_size),
             torch.nn.Sigmoid(),
-            torch.nn.Linear(256, num_class),
+            
+            torch.nn.Linear(hidden_size, hidden_size2),
+            torch.nn.Sigmoid(),
+
+            torch.nn.Linear(hidden_size2, hidden_size3),
+            torch.nn.Sigmoid(),
+
+            torch.nn.Linear(hidden_size3, num_class),
         )
 
     def forward(self, batch) -> Dict[str, torch.Tensor]:
