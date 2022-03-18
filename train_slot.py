@@ -15,6 +15,11 @@ from model import SeqSlotClassifier
 from tqdm.auto import tqdm
 import os
 
+import csv
+
+from seqeval.metrics import accuracy_score, classification_report, f1_score
+from seqeval.scheme import IOB2
+
 TRAIN = "train"
 DEV = "eval"
 SPLITS = [TRAIN, DEV]
@@ -39,7 +44,7 @@ def main(args):
 
     embeddings = torch.load(args.cache_dir / "embeddings.pt")
     # TODO: init model and move model to target device(cpu / gpu)
-    model = SeqSlotClassifier(embeddings, args.hidden_size, args.num_layers, args.dropout, args.bidirectional, datasets[TRAIN].num_classes).to(device=args.device)
+    model = SeqSlotClassifier(args.rnn_module, embeddings, args.hidden_size, args.num_layers, args.dropout, args.bidirectional, datasets[TRAIN].num_classes).to(device=args.device)
     # model = None
 
     # TODO: init optimizer
@@ -55,11 +60,15 @@ def main(args):
     criterion = torch.nn.CrossEntropyLoss(reduction='mean')
     best_loss = float("inf")
     best_acc = 0.0
-    args.checkpoint_name = "b%dl%.0e.pt"%(args.batch_size, args.lr)
     print(f'checkpoint_name: {args.checkpoint_name}')
 
     epoch_pbar = trange(args.num_epoch, desc="Epoch")
     
+    train_loss_per_epoch = []
+    train_acc_per_epoch = []
+    valid_loss_per_epoch = []
+    valid_acc_per_epoch = []
+
     for epoch in epoch_pbar:
         # TODO: Training loop - iterate over train dataloader and update model weights
         model.train()
@@ -67,8 +76,11 @@ def main(args):
         train_total = 0
         train_acc = 0
         tqdm_object = tqdm(train_loader, total=len(train_loader))
-
+        train_losses = []
         for batch in tqdm_object:
+            # TODO: randomly mask it.
+            
+            
             logits = model(batch['encoded_tokens'].to(device=args.device)) 
             # logits.shape = [batch_size, seq_len, num_classes]   
 
@@ -88,16 +100,16 @@ def main(args):
             for i in range(batch_size):
                 pred = logits[i].argmax(dim=-1).to("cpu")[:lengths[i]]
                 label = target[i].to("cpu")[:lengths[i]]
-                # if (i == 0):
-                #     print(pred)
-                #     print(label)
                 if (pred == label).sum().item() == lengths[i]:
-                    # if (i==0):
-                    #     print("match")
                     train_acc += 1 
-
+            
+            train_losses.append(loss.item())
             tqdm_object.set_postfix(train_loss=loss.item(), train_acc=train_acc/train_total)
         
+        train_loss = sum(train_losses) / len(train_losses)
+        train_loss_per_epoch.append(train_loss)
+        train_acc_per_epoch.append(train_acc / train_total)
+
         # TODO: Evaluation loop - calculate accuracy and save model weights
         model.eval()
 
@@ -106,6 +118,8 @@ def main(args):
         tqdm_object = tqdm(dev_loader, total=len(dev_loader))
 
         valid_losses = []
+        valid_pred_tag = []
+        valid_true_tag = []
         with torch.no_grad():
             for batch in tqdm_object:
                 logits = model(batch['encoded_tokens'].to(device=args.device)) 
@@ -120,6 +134,9 @@ def main(args):
                 for i in range(batch_size):
                     pred = logits[i].argmax(dim=-1).to("cpu")[:lengths[i]]
                     label = target[i].to("cpu")[:lengths[i]]
+                    if args.enable_analysis:
+                        valid_pred_tag.append([datasets[DEV].idx2label(x) for x in pred.tolist()])
+                        valid_true_tag.append([datasets[DEV].idx2label(x) for x in label.tolist()])
                     correct_cnt = (pred == label).sum().item()
                     if correct_cnt == lengths[i]:
                         val_acc += 1 
@@ -128,6 +145,9 @@ def main(args):
                 tqdm_object.set_postfix(valid_loss=loss.item(), valid_acc=val_acc/val_total)
 
         valid_loss = sum(valid_losses) / len(valid_losses)
+        valid_loss_per_epoch.append(valid_loss)
+        valid_acc_per_epoch.append(val_acc / val_total)
+
         lr_scheduler.step(valid_loss)
         if valid_loss < best_loss:
             best_loss = valid_loss
@@ -135,13 +155,34 @@ def main(args):
                 best_acc = val_acc/val_total
             print(f'Save model. epoch: {epoch} valid_loss: {valid_loss} valid_acc: {val_acc/val_total}')
             torch.save(model.state_dict(), os.path.join(args.ckpt_dir, args.checkpoint_name))
+            if args.enable_analysis:
+                valid_best_pred_tag = valid_pred_tag
+                valid_best_true_tag = valid_true_tag
+
         elif val_acc/val_total > best_acc:
             best_acc = val_acc/val_total
             print(f'Save model. epoch: {epoch} valid_loss: {valid_loss} valid_acc: {val_acc/val_total}')
             torch.save(model.state_dict(), os.path.join(args.ckpt_dir, args.checkpoint_name))
+            if args.enable_analysis:
+                valid_best_pred_tag = valid_pred_tag
+                valid_best_true_tag = valid_true_tag
 
     # TODO: Inference on test set
     print(f'checkpoint_name: {args.checkpoint_name}')
+    if args.enable_analysis:
+        with open("true.txt","w") as f:
+            f.write(str(valid_best_true_tag))
+        with open("pred.txt","w") as f:
+            f.write(str(valid_best_pred_tag))
+        print("classification_report")
+        print(classification_report(valid_best_true_tag, valid_best_pred_tag, mode='strict', scheme=IOB2))
+        with open("compare/compare_slot_hid.csv","a+") as f:
+            writer = csv.writer(f)
+            writer.writerow([args.checkpoint_name])
+            writer.writerow(train_loss_per_epoch)
+            writer.writerow(train_acc_per_epoch)
+            writer.writerow(valid_loss_per_epoch)
+            writer.writerow(valid_acc_per_epoch)
 
 
 def parse_args() -> Namespace:
@@ -164,12 +205,14 @@ def parse_args() -> Namespace:
         help="Directory to save the model file.",
         default="./ckpt/slot/",
     )
+    # module
+    parser.add_argument("--rnn_module", type=str, default="LSTM")
 
     # data
     parser.add_argument("--max_len", type=int, default=64)
 
     # model
-    parser.add_argument("--hidden_size", type=int, default=512)
+    parser.add_argument("--hidden_size", type=int, default=1024)
     parser.add_argument("--num_layers", type=int, default=2)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--bidirectional", type=bool, default=True)
@@ -178,7 +221,7 @@ def parse_args() -> Namespace:
     parser.add_argument("--lr", type=float, default=1e-3)
 
     # data loader
-    parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_workers", type=int, default=4)
 
     # training
@@ -188,6 +231,7 @@ def parse_args() -> Namespace:
     parser.add_argument("--num_epoch", type=int, default=100)
     parser.add_argument("--checkpoint_name", type=str, default='model.pt')
 
+    parser.add_argument("--enable_analysis", type=bool, default=False)
     args = parser.parse_args()
     return args
 

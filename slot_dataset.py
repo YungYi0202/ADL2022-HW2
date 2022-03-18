@@ -21,6 +21,7 @@ class SeqClsDataset(Dataset):
         self.max_len = max_len
         self.PAD = "PAD"
         self.label_mapping[self.PAD]= 9
+        self._idx2label[9] = "O"
 
     def __len__(self) -> int:
         return len(self.data)
