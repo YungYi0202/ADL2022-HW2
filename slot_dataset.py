@@ -38,7 +38,8 @@ class SeqClsDataset(Dataset):
         # for sample in samples
         #   sample = ['tokens': [...], 'tags': [...], 'id': ...]
         tokens = [sample['tokens'] for sample in samples]
-        encoded_tokens = torch.tensor(self.vocab.encode_batch(tokens))
+        # encoded_tokens = torch.tensor(self.vocab.encode_batch(tokens))
+        encoded_tokens = self.vocab.encode_batch(tokens)
         labels = []
         lengths = []
         for sample in samples:
@@ -46,7 +47,8 @@ class SeqClsDataset(Dataset):
             lengths.append(len(tmp))
             labels.append(tmp)
         # labels.shape = [samples.size[0], seq_len]
-        labels = pad_to_len(labels, encoded_tokens.shape[1], self.label_mapping[self.PAD])
+        # labels = pad_to_len(labels, encoded_tokens.shape[1], self.label_mapping[self.PAD])
+        labels = pad_to_len(labels, len(encoded_tokens[0]), self.label_mapping[self.PAD])
         labels = torch.tensor(labels)
         
         return {

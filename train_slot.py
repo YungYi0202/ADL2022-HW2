@@ -20,6 +20,8 @@ import csv
 from seqeval.metrics import accuracy_score, classification_report, f1_score
 from seqeval.scheme import IOB2
 
+import random
+
 TRAIN = "train"
 DEV = "eval"
 SPLITS = [TRAIN, DEV]
@@ -61,6 +63,9 @@ def main(args):
     best_loss = float("inf")
     best_acc = 0.0
     print(f'checkpoint_name: {args.checkpoint_name}')
+    if args.enable_mask:
+        print("Enable mask.")
+    
 
     epoch_pbar = trange(args.num_epoch, desc="Epoch")
     
@@ -78,10 +83,20 @@ def main(args):
         tqdm_object = tqdm(train_loader, total=len(train_loader))
         train_losses = []
         for batch in tqdm_object:
-            # TODO: randomly mask it.
-            
-            
-            logits = model(batch['encoded_tokens'].to(device=args.device)) 
+            # TODO: randomly mask it. Only when training
+            batch_input = batch['encoded_tokens']
+            lengths = batch['lengths']
+            batch_size = len(lengths)
+
+            if args.enable_mask:
+                for i in range(batch_size):
+                    if random.random() > 0.5:
+                        mask_amt = int (lengths[i] * 0.2)
+                        mask_unit = random.sample(range(0, lengths[i]), mask_amt)
+                        for unit in mask_unit:
+                            batch_input[i][unit] = vocab.unk_id
+            batch_input = torch.tensor(batch_input, dtype=torch.int)
+            logits = model(batch_input.to(device=args.device)) 
             # logits.shape = [batch_size, seq_len, num_classes]   
 
             target = batch['labels'].to(device=args.device)
@@ -93,8 +108,7 @@ def main(args):
             loss.backward()
             optimizer.step()
 
-            lengths = batch['lengths']
-            batch_size = len(lengths)
+            
             train_total += batch_size
 
             for i in range(batch_size):
@@ -122,6 +136,7 @@ def main(args):
         valid_true_tag = []
         with torch.no_grad():
             for batch in tqdm_object:
+                batch['encoded_tokens'] = torch.tensor(batch['encoded_tokens'])
                 logits = model(batch['encoded_tokens'].to(device=args.device)) 
                 target = batch['labels'].to(device=args.device)
 
@@ -176,7 +191,7 @@ def main(args):
             f.write(str(valid_best_pred_tag))
         print("classification_report")
         print(classification_report(valid_best_true_tag, valid_best_pred_tag, mode='strict', scheme=IOB2))
-        with open("compare/compare_slot_hid.csv","a+") as f:
+        with open(args.compare_file,"a+") as f:
             writer = csv.writer(f)
             writer.writerow([args.checkpoint_name])
             writer.writerow(train_loss_per_epoch)
@@ -232,6 +247,8 @@ def parse_args() -> Namespace:
     parser.add_argument("--checkpoint_name", type=str, default='model.pt')
 
     parser.add_argument("--enable_analysis", type=bool, default=False)
+    parser.add_argument("--compare_file", type=str, default="compare.csv")
+    parser.add_argument("--enable_mask", type=bool, default=True)
     args = parser.parse_args()
     return args
 

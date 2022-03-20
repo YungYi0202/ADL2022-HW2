@@ -14,6 +14,8 @@ from model import SeqClassifier
 
 from tqdm.auto import tqdm
 import os
+import csv
+import random
 
 TRAIN = "train"
 DEV = "eval"
@@ -47,19 +49,29 @@ def main(args):
     #optimizer = None
 
     # TRY: lr_scheduler
-    lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, 
-        mode='min',
-        factor=args.factor,
-    )
+    if args.enable_lr_scheduler:
+        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, 
+            mode='min',
+            factor=args.factor,
+        )
 
     criterion = torch.nn.CrossEntropyLoss(reduction='mean')
     best_loss = float("inf")
     best_acc = 0.0
-    args.checkpoint_name = "b%dl%.0e.pt"%(args.batch_size, args.lr)
     print(f'checkpoint_name: {args.checkpoint_name}')
+    if args.enable_analysis:
+        print("Enable analysis")
+    if args.enable_mask:
+        print("Enable mask")
 
     epoch_pbar = trange(args.num_epoch, desc="Epoch")
+
+    train_loss_per_epoch = []
+    train_acc_per_epoch = []
+    valid_loss_per_epoch = []
+    valid_acc_per_epoch = []
+
     for epoch in epoch_pbar:
         # TODO: Training loop - iterate over train dataloader and update model weights
         model.train()
@@ -67,10 +79,24 @@ def main(args):
         train_total = 0
         train_acc = 0
         tqdm_object = tqdm(train_loader, total=len(train_loader))
-
+        train_losses = []
         for batch in tqdm_object:
+            # Mask out.
+            batch_input = batch['encoded_text']
+            lengths = batch['lengths']
+            batch_size = len(lengths)
+
+            if args.enable_mask:
+                for i in range(batch_size):
+                    if random.random() > 0.5:
+                        mask_amt = int (lengths[i] * 0.2)
+                        mask_unit = random.sample(range(0, lengths[i]), mask_amt)
+                        for unit in mask_unit:
+                            batch_input[i][unit] = vocab.unk_id
+            batch_input = torch.tensor(batch_input, dtype=torch.int)
+            logits = model(batch_input.to(device=args.device)) 
             # logits.shape = [batch_size, num_classes] 
-            logits = model(batch['encoded_text'].to(device=args.device))    
+            # logits = model(batch['encoded_text'].to(device=args.device))    
             # target,shape = [batch_size]
             target = batch['label'].to(device=args.device)
             
@@ -80,11 +106,16 @@ def main(args):
             loss.backward()
             optimizer.step()
 
-            train_total += batch['encoded_text'].size(0)
+            train_total += batch_size
             train_acc += (logits.argmax(dim=-1).to("cpu") == target.to("cpu")).sum().item()
-
+            
+            train_losses.append(loss.item())
             tqdm_object.set_postfix(train_loss=loss.item(), train_acc=train_acc/train_total)
         
+        train_loss = sum(train_losses) / len(train_losses)
+        train_loss_per_epoch.append(train_loss)
+        train_acc_per_epoch.append(train_acc / train_total)
+
         # TODO: Evaluation loop - calculate accuracy and save model weights
         model.eval()
 
@@ -95,6 +126,7 @@ def main(args):
         valid_losses = []
         with torch.no_grad():
             for batch in tqdm_object:
+                batch['encoded_text'] = torch.tensor(batch['encoded_text'])
                 logits = model(batch['encoded_text'].to(device=args.device))
                 target = batch['label'].to(device=args.device)
 
@@ -107,7 +139,11 @@ def main(args):
                 tqdm_object.set_postfix(valid_loss=loss.item(), valid_acc=val_acc/val_total)
 
         valid_loss = sum(valid_losses) / len(valid_losses)
-        lr_scheduler.step(valid_loss)
+        valid_loss_per_epoch.append(valid_loss)
+        valid_acc_per_epoch.append(val_acc / val_total)
+
+        if args.enable_lr_scheduler:
+            lr_scheduler.step(valid_loss)
         if valid_loss < best_loss:
             best_loss = valid_loss
             if val_acc/val_total > best_acc:
@@ -121,6 +157,14 @@ def main(args):
 
     # TODO: Inference on test set
     print(f'checkpoint_name: {args.checkpoint_name}')
+    if args.enable_analysis:
+        with open(args.compare_file,"a+") as f:
+            writer = csv.writer(f)
+            writer.writerow([args.checkpoint_name])
+            writer.writerow(train_loss_per_epoch)
+            writer.writerow(train_acc_per_epoch)
+            writer.writerow(valid_loss_per_epoch)
+            writer.writerow(valid_acc_per_epoch)
 
 
 def parse_args() -> Namespace:
@@ -148,7 +192,7 @@ def parse_args() -> Namespace:
     parser.add_argument("--max_len", type=int, default=128)
 
     # model
-    parser.add_argument("--hidden_size", type=int, default=512)
+    parser.add_argument("--hidden_size", type=int, default=1024)
     parser.add_argument("--num_layers", type=int, default=2)
     parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--bidirectional", type=bool, default=True)
@@ -168,8 +212,13 @@ def parse_args() -> Namespace:
     parser.add_argument("--checkpoint_name", type=str, default='model.pt')
 
     #lr_scheduler
+    parser.add_argument("--enable_lr_scheduler", type=bool, default=True)
     parser.add_argument("--factor", type=float, default=0.1)
 
+    parser.add_argument("--enable_analysis", type=bool, default=False)
+    parser.add_argument("--compare_file", type=str, default="compare.csv")
+    parser.add_argument("--enable_mask", type=bool, default=True)
+    
     args = parser.parse_args()
     return args
 
