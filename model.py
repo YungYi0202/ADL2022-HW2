@@ -59,8 +59,7 @@ class SeqSlotClassifier(torch.nn.Module):
         num_layers: int,
         dropout: float,
         bidirectional: bool,
-        num_class: int,
-        n_head: int = 15
+        num_class: int
     ) -> None:
         super(SeqSlotClassifier, self).__init__()
         self.embed = Embedding.from_pretrained(embeddings, freeze=False)

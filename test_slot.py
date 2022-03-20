@@ -8,6 +8,7 @@ import torch
 
 from slot_dataset import SeqClsDataset
 from model import SeqSlotClassifier
+from model_transformer import SeqSlotTransformerClassifier
 from utils import Vocab
 
 from torch.utils.data import DataLoader
@@ -26,17 +27,21 @@ def main(args):
     test_loader = DataLoader(dataset, batch_size=args.batch_size, collate_fn=dataset.collate_fn_test, num_workers=args.num_workers)
     
     embeddings = torch.load(args.cache_dir / "embeddings.pt")
-
-    model = SeqSlotClassifier(
-        args.rnn_module,
-        embeddings,
-        args.hidden_size,
-        args.num_layers,
-        args.dropout,
-        args.bidirectional,
-        dataset.num_classes,
-    )
+    if args.use_transformer:
+        model = SeqSlotTransformerClassifier(embeddings, args.hidden_size, args.num_layers, args.dropout, dataset.num_classes).to(device=args.device)
+    else:
+        model = SeqSlotClassifier(
+            args.rnn_module,
+            embeddings,
+            args.hidden_size,
+            args.num_layers,
+            args.dropout,
+            args.bidirectional,
+            dataset.num_classes,
+        )
     model.eval()
+    start_idx = 0 if args.use_transformer else 1
+    print(f"start_idx: {start_idx}")
 
     ckpt = torch.load(args.ckpt_path)
     # load weights into model
@@ -50,13 +55,13 @@ def main(args):
     with torch.no_grad():
         for batch in tqdm_object:
             logits = model(batch['encoded_tokens'].to(device=args.device)) 
-            # logits.shape = [batch_size, seq_len, num_classes]   
+            # logits.shape = [batch_size, seq_len + 2, num_classes]   
             lengths = batch['lengths']
-            # logits.shape = [batch_size]
+            # lengths.shape = [batch_size]
             tag_idxs = logits.argmax(dim=-1)
-            # tag_idxs.shape = [batch_size, seq_len]
+            # tag_idxs.shape = [batch_size, seq_len + 2]
             for i in range(len(lengths)):
-                tags = [dataset.idx2label(tag_idx.item()) for tag_idx in tag_idxs[i][:lengths[i]]]
+                tags = [dataset.idx2label(tag_idx.item()) for tag_idx in tag_idxs[i][start_idx:lengths[i]+start_idx]]
                 test_tags.append(tags)
             test_ids.extend(batch['id'])
 
@@ -101,6 +106,7 @@ def parse_args() -> Namespace:
     # data loader
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_workers", type=int, default=2)
+    parser.add_argument("--use_transformer", type=bool, default=False)
 
     parser.add_argument(
         "--device", type=torch.device, help="cpu, cuda, cuda:0, cuda:1", default="cpu"

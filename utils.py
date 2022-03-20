@@ -4,12 +4,16 @@ from typing import Iterable, List
 class Vocab:
     PAD = "[PAD]"
     UNK = "[UNK]"
+    BOS = "[BOS]"
+    EOS = "[EOS]"
 
     def __init__(self, vocab: Iterable[str]) -> None:
         self.token2idx = {
             Vocab.PAD: 0,
             Vocab.UNK: 1,
-            **{token: i for i, token in enumerate(vocab, 2)},
+            Vocab.BOS: 2,
+            Vocab.EOS: 3,
+            **{token: i for i, token in enumerate(vocab, 4)},
         }
 
     @property

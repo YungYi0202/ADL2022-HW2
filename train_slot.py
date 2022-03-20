@@ -11,6 +11,7 @@ from tqdm import trange
 from slot_dataset import SeqClsDataset
 from utils import Vocab
 from model import SeqSlotClassifier
+from model_transformer import SeqSlotTransformerClassifier
 
 from tqdm.auto import tqdm
 import os
@@ -19,6 +20,8 @@ import csv
 
 from seqeval.metrics import accuracy_score, classification_report, f1_score
 from seqeval.scheme import IOB2
+
+
 
 TRAIN = "train"
 DEV = "eval"
@@ -44,8 +47,13 @@ def main(args):
 
     embeddings = torch.load(args.cache_dir / "embeddings.pt")
     # TODO: init model and move model to target device(cpu / gpu)
-    model = SeqSlotClassifier(args.rnn_module, embeddings, args.hidden_size, args.num_layers, args.dropout, args.bidirectional, datasets[TRAIN].num_classes).to(device=args.device)
+    if args.use_transformer:
+        print("Transformer")
+        model = SeqSlotTransformerClassifier(embeddings, args.hidden_size, args.num_layers, args.dropout, datasets[TRAIN].num_classes).to(device=args.device)
+    else:
+        model = SeqSlotClassifier(args.rnn_module, embeddings, args.hidden_size, args.num_layers, args.dropout, args.bidirectional, datasets[TRAIN].num_classes).to(device=args.device)
     # model = None
+    start_idx = 0 if args.use_transformer else 1
 
     # TODO: init optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -80,16 +88,20 @@ def main(args):
         for batch in tqdm_object:
             # TODO: randomly mask it.
             
-            
+            # print(batch['encoded_tokens'].shape)
             logits = model(batch['encoded_tokens'].to(device=args.device)) 
             # logits.shape = [batch_size, seq_len, num_classes]   
-
+            # print(logits.shape)
             target = batch['labels'].to(device=args.device)
+            if args.use_transformer:
+                target = target[:,1:]
+            # print(target)
             # target,shape = [batch_size, seq_len]
+            # print(target.shape)
 
             # TODO: Do something to logits
             optimizer.zero_grad()
-            loss = criterion(logits.view(-1, datasets[TRAIN].num_classes), target.view(-1))      
+            loss = criterion(logits.reshape(-1, datasets[TRAIN].num_classes), target.reshape(-1))      
             loss.backward()
             optimizer.step()
 
@@ -98,8 +110,10 @@ def main(args):
             train_total += batch_size
 
             for i in range(batch_size):
-                pred = logits[i].argmax(dim=-1).to("cpu")[:lengths[i]]
-                label = target[i].to("cpu")[:lengths[i]]
+                pred = logits[i].argmax(dim=-1).to("cpu")[start_idx:lengths[i]+start_idx]
+                label = target[i].to("cpu")[start_idx:lengths[i]+start_idx]
+                # print(f"pred: {pred}")
+                # print(f"label: {label}")
                 if (pred == label).sum().item() == lengths[i]:
                     train_acc += 1 
             
@@ -124,16 +138,18 @@ def main(args):
             for batch in tqdm_object:
                 logits = model(batch['encoded_tokens'].to(device=args.device)) 
                 target = batch['labels'].to(device=args.device)
-
-                loss = criterion(logits.view(-1, datasets[TRAIN].num_classes), target.view(-1))    
+                if args.use_transformer:
+                    target = target[:,1:]
+                loss = criterion(logits.reshape(-1, datasets[TRAIN].num_classes), target.reshape(-1))    
 
                 lengths = batch['lengths']
                 batch_size = len(lengths)
                 val_total += batch_size
 
                 for i in range(batch_size):
-                    pred = logits[i].argmax(dim=-1).to("cpu")[:lengths[i]]
-                    label = target[i].to("cpu")[:lengths[i]]
+                    
+                    pred = logits[i].argmax(dim=-1).to("cpu")[start_idx:lengths[i]+start_idx]
+                    label = target[i].to("cpu")[start_idx:lengths[i]+start_idx]
                     if args.enable_analysis:
                         valid_pred_tag.append([datasets[DEV].idx2label(x) for x in pred.tolist()])
                         valid_true_tag.append([datasets[DEV].idx2label(x) for x in label.tolist()])
@@ -170,13 +186,9 @@ def main(args):
     # TODO: Inference on test set
     print(f'checkpoint_name: {args.checkpoint_name}')
     if args.enable_analysis:
-        with open("true.txt","w") as f:
-            f.write(str(valid_best_true_tag))
-        with open("pred.txt","w") as f:
-            f.write(str(valid_best_pred_tag))
         print("classification_report")
         print(classification_report(valid_best_true_tag, valid_best_pred_tag, mode='strict', scheme=IOB2))
-        with open("compare/compare_slot_hid.csv","a+") as f:
+        with open("compare/BOS_EOS.csv","a+") as f:
             writer = csv.writer(f)
             writer.writerow([args.checkpoint_name])
             writer.writerow(train_loss_per_epoch)
@@ -232,6 +244,7 @@ def parse_args() -> Namespace:
     parser.add_argument("--checkpoint_name", type=str, default='model.pt')
 
     parser.add_argument("--enable_analysis", type=bool, default=False)
+    parser.add_argument("--use_transformer", type=bool, default=False)
     args = parser.parse_args()
     return args
 
@@ -239,4 +252,7 @@ def parse_args() -> Namespace:
 if __name__ == "__main__":
     args = parse_args()
     args.ckpt_dir.mkdir(parents=True, exist_ok=True)
+    # args.checkpoint_name = "boseos-1.pt"
     main(args)
+    # args.checkpoint_name = "boseos-2.pt"
+    # main(args)
