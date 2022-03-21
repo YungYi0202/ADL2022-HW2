@@ -17,7 +17,7 @@ bash preprocess.sh
 ## Intent detection
 
 ### Train
-
+Reproduce the result. (The parameters are all set default.)
 ```shell
 python train_intent.py --device cuda:0 --checkpoint_name {your own checkpoint name}
 ```
@@ -41,10 +41,11 @@ sh intent_cls.sh
 ## Slot tagging
 
 ### Train
-
+Reproduce the result. (The parameters are all set default.)
 ```shell
 python train_slot.py --device cuda:0 --checkpoint_name {your own checkpoint name}
 ```
+
 ### Test 
 
 With your own checkpoint:

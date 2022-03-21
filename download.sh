@@ -1,2 +1,15 @@
-wget http://jerome.anyday.com.tw/csie/fixLSTM_b32_hid1024.pt
-wget http://jerome.anyday.com.tw/csie/intent13.pt
+wget http://jerome.anyday.com.tw/csie/intent_mask.pt
+wget http://jerome.anyday.com.tw/csie/slot_mask-2.pt
+mkdir cache
+cd cache
+mkdir intent
+cd intent
+wget http://jerome.anyday.com.tw/csie/cache/intent/embeddings.pt
+wget http://jerome.anyday.com.tw/csie/cache/intent/intent2idx.json
+wget http://jerome.anyday.com.tw/csie/cache/intent/vocab.pkl
+cd ..
+mkdir slot
+cd slot
+wget http://jerome.anyday.com.tw/csie/cache/slot/embeddings.pt
+wget http://jerome.anyday.com.tw/csie/cache/slot/tag2idx.json
+wget http://jerome.anyday.com.tw/csie/cache/slot/vocab.pkl
