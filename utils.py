@@ -54,7 +54,9 @@ def _swag_like_dataset(questions, paragraphs, candidate_paragraph_ids, answers):
     size = len(questions)
     dataset_split['sent1'] = questions
     dataset_split['sent2'] = ["" for i in range(size)]
-    if not answers == None:
+    if answers == None:
+        dataset_split['label'] = [0 for i in range(size)]
+    else:
         dataset_split['label'] = [get_match_index(candidates, answer) for candidates, answer in zip(candidate_paragraph_ids, answers)]
     for i, ending_name in enumerate(ending_names):
         dataset_split[ending_name] = [ paragraphs[candidates[i]] for candidates in candidate_paragraph_ids]
