@@ -22,7 +22,7 @@ from utils import read_data, get_ending_names, swag_like_dataset
 from dataset import DataCollatorForMultipleChoice
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "4"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 import csv
 
@@ -200,7 +200,7 @@ def parse_args() -> Namespace:
     )
     parser.add_argument("--max_len", type=int, default=384)
     
-    parser.add_argument("--experiment_number", , type=int, default=0)
+    parser.add_argument("--experiment_number", type=int, default=0)
     # optimizer
     parser.add_argument("--lr", type=float, default=3e-5)
 
@@ -235,10 +235,10 @@ if __name__ == "__main__":
     args = parse_args()
     
     args.ckpt_dir.mkdir(parents=True, exist_ok=True)
-    args.ckpt_dir = args.ckpt_dir / args.experiment_number
+    args.ckpt_dir = args.ckpt_dir / str(args.experiment_number)
     args.ckpt_dir.mkdir(parents=True, exist_ok=True)
     
     args.mc_pred_dir.mkdir(parents=True, exist_ok=True)
-    args.mc_pred_dir = args.mc_pred_dir / args.experiment_number
+    args.mc_pred_dir = args.mc_pred_dir / str(args.experiment_number)
     args.mc_pred_dir.mkdir(parents=True, exist_ok=True)
     main(args)
