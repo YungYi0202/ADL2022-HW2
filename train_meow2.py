@@ -20,6 +20,7 @@ from tqdm.auto import tqdm
 
 from utils import read_data, get_ending_names, swag_like_dataset, TRAIN, DEV, TEST, SPLITS, evaluate
 from dataset import DataCollatorForMultipleChoice, QA_Dataset
+from scheduler import get_cosine_schedule_with_warmup
 
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "7"
@@ -200,9 +201,10 @@ def qa_get_dataloaders(args, splits, tokenizer, paragraphs, questions, relevant_
 
     return train_loader, dev_loader, test_loader, split_paragraphs, tokenized_paragraphs
 
-def qa_train_epoch(args, qa_model, train_loader, optimizer, scheduler, device):
+def qa_train_epoch(epoch, args, qa_model, train_loader, optimizer, scheduler, device):
     step = 0
     train_loss = train_acc = 0.0
+    qa_model.train()
     for batch_idx, data in enumerate(tqdm(train_loader)):	
                     
         # Load all data into GPU
@@ -239,6 +241,33 @@ def qa_train_epoch(args, qa_model, train_loader, optimizer, scheduler, device):
             train_loss = train_acc = 0
     return step
 
+def qa_dev_epoch(epoch, args, qa_model, dev_loader, device, tokenizer, max_seq_length, split_paragraphs, tokenized_paragraphs, ids, answers, best_val_acc=None):
+    print("Evaluating Dev Set ...")
+    qa_model.eval()
+    with torch.no_grad():
+        dev_acc = 0.0
+        for i, data in enumerate(tqdm(dev_loader)):
+            output = qa_model(input_ids=data[0].squeeze(dim=0).to(device), token_type_ids=data[1].squeeze(dim=0).to(device),
+                attention_mask=data[2].squeeze(dim=0).to(device))
+            # prediction is correct only if answer text exactly matches
+            result = evaluate(data, output, tokenizer, device, max_seq_length, args.qa_doc_stride, split_paragraphs[DEV][i], tokenized_paragraphs[DEV][i].tokens)
+            dev_acc += result == answers[DEV][i]["text"]
+            if i % args.qa_logging_step == 0: 
+                print(f"id:{ids[DEV][i]} result: {result} answer: {answers[DEV][i]['text']}")
+        
+        print(f"Validation | Epoch {epoch + 1} | acc = {dev_acc / len(dev_loader):.3f}")
+
+        if best_val_acc != None and dev_acc / len(dev_loader) > best_val_acc:
+            best_val_acc = dev_acc / len(dev_loader)
+            # Save a model and its configuration file to the directory 「saved_model」 
+            # i.e. there are two files under the direcory 「saved_model」: 「pytorch_model.bin」 and 「config.json」
+            # Saved model can be re-loaded using 「model = BertForQuestionAnswering.from_pretrained("saved_model")」
+            print("Saving Model ...")
+            qa_model.save_pretrained(args.qa_ckpt_dir / "model")
+            torch.save(optimizer.state_dict(), args.qa_ckpt_dir / "optimizer.pt")
+            torch.save(scheduler.state_dict(), args.qa_ckpt_dir / "scheduler.pt") 
+    return best_val_acc
+
 def main(args):
     set_seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -272,7 +301,6 @@ def main(args):
     relevant_paragraph_ids = {split: [sample["relevant"] for sample in data[split]] for split in SPLITS}
     ids = {split: [sample["id"] for sample in data[split]] for split in splits}
     answers = {split: [sample["answer"] for sample in data[split]] for split in SPLITS} if do_qa else None
-
     
     mc_predictions = None
     if do_mc:
@@ -301,106 +329,31 @@ def main(args):
             optimizer = AdamW(qa_model.parameters(), lr=args.qa_lr)
             total_steps = len(train_loader) * args.qa_num_epoch
             warmup_steps = int(total_steps * args.qa_warmup_ratio)
-            scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps= warmup_steps, num_training_steps=total_steps)
+            
+            # scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps= warmup_steps, num_training_steps=total_steps)
+            scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
             
             if args.qa_resume:
                 optimizer.load_state_dict(args.qa_ckpt_dir / "optimizer.pt")
                 scheduler.load_state_dict(args.qa_ckpt_dir / "scheduler.pt")
-            
-            qa_model.train()
+                 
             print(f"Start Training ... total steps: {total_steps}")
             
             best_val_acc = 0.0
-
             for epoch in range(args.qa_num_epoch):
                 step = 1
-                train_loss = train_acc = 0.0
-                
-                for batch_idx, data in enumerate(tqdm(train_loader)):	
-                    
-                    # Load all data into GPU
-                    data = [i.to(device) for i in data]
-                    
-                    # Model inputs: input_ids, token_type_ids, attention_mask, start_positions, end_positions (Note: only "input_ids" is mandatory)
-                    # Model outputs: start_logits, end_logits, loss (return when start_positions/end_positions are provided)  
-                    
-                    # data = [input_ids, token_type_ids, attention_mask, answer_start_token, answer_end_token]
-
-                    output = qa_model(input_ids=data[0], token_type_ids=data[1], attention_mask=data[2], start_positions=data[3], end_positions=data[4])
-
-                    # Choose the most probable start position / end position
-                    start_index = torch.argmax(output.start_logits, dim=1)
-                    end_index = torch.argmax(output.end_logits, dim=1)
-                    
-                    # Prediction is correct only if both start_index and end_index are correct
-                    train_acc += ((start_index == data[3]) & (end_index == data[4])).float().mean()
-                    train_loss += output.loss
-                    
-                    output.loss.backward()
-                    
-                    if ((batch_idx + 1) % args.qa_accu_grad == 0) or (batch_idx + 1 == len(train_loader)):
-                        optimizer.step()
-                        optimizer.zero_grad()
-                        for i in range(args.qa_accu_grad):
-                            scheduler.step()
-
-                    step += 1
-
-                    # Print training loss and accuracy over past logging step
-                    if step % args.qa_logging_step == 0:
-                        print(f"Epoch {epoch + 1} | Step {step} | loss = {train_loss.item() / args.qa_logging_step:.3f}, acc = {train_acc / args.qa_logging_step:.3f}")
-                        train_loss = train_acc = 0
-
-                print("Evaluating Dev Set ...")
-                qa_model.eval()
-                with torch.no_grad():
-                    dev_acc = 0.0
-                    for i, data in enumerate(tqdm(dev_loader)):
-                        output = qa_model(input_ids=data[0].squeeze(dim=0).to(device), token_type_ids=data[1].squeeze(dim=0).to(device),
-                            attention_mask=data[2].squeeze(dim=0).to(device))
-                        # prediction is correct only if answer text exactly matches
-                        result = evaluate(data, output, tokenizer, device, max_seq_length, args.qa_doc_stride, split_paragraphs[DEV][i], tokenized_paragraphs[DEV][i].tokens)
-                        dev_acc += result == answers[DEV][i]["text"]
-                        if i % args.qa_logging_step == 0: 
-                            print(f"id:{ids[DEV][i]} result: {result} answer: {answers[DEV][i]['text']}")
-                    
-                    print(f"Validation | Epoch {epoch + 1} | acc = {dev_acc / len(dev_loader):.3f}")
-
-                    if dev_acc / len(dev_loader) > best_val_acc:
-                        best_val_acc = dev_acc / len(dev_loader)
-                        # Save a model and its configuration file to the directory 「saved_model」 
-                        # i.e. there are two files under the direcory 「saved_model」: 「pytorch_model.bin」 and 「config.json」
-                        # Saved model can be re-loaded using 「model = BertForQuestionAnswering.from_pretrained("saved_model")」
-                        print("Saving Model ...")
-                        qa_model.save_pretrained(args.qa_ckpt_dir / "model")
-
-                        torch.save(optimizer.state_dict(), args.qa_ckpt_dir / "optimizer.pt")
-                        torch.save(scheduler.state_dict(), args.qa_ckpt_dir / "scheduler.pt")    
-                
-                qa_model.train()    
-            
+                step += qa_train_epoch(epoch, args, qa_model, train_loader, optimizer, scheduler, device)
+                best_val_acc = qa_dev_epoch(epoch, args, qa_model, dev_loader, device, tokenizer, max_seq_length, split_paragraphs, tokenized_paragraphs, ids, answers, best_val_acc)
 
         if args.do_qa_test:
-            qa_model.eval()
             results = []
             
             if not args.do_qa_train:
                 print("Evaluating Dev Set for check...")
-                with torch.no_grad():
-                    dev_acc = 0.0
-                    for i, data in enumerate(tqdm(dev_loader)):
-                        output = qa_model(input_ids=data[0].squeeze(dim=0).to(device), token_type_ids=data[1].squeeze(dim=0).to(device),
-                            attention_mask=data[2].squeeze(dim=0).to(device))
-                        # prediction is correct only if answer text exactly matches
-                        result = evaluate(data, output, tokenizer, device, max_seq_length, args.qa_doc_stride, split_paragraphs[DEV][i], tokenized_paragraphs[DEV][i].tokens)
-                        dev_acc += result == answers[DEV][i]["text"]
-                        if i % args.qa_logging_step == 0: 
-                            print(f"id:{ids[DEV][i]} result: {result} answer: {answers[DEV][i]['text']}")
-                    
-                    print(f"Validation | Epoch last | acc = {dev_acc / len(dev_loader):.3f}")
+                qa_dev_epoch("last", args, qa_model, dev_loader, device, tokenizer, max_seq_length, split_paragraphs, tokenized_paragraphs, ids, answers, None)
 
             print("Evaluating Test Set ...")
-            
+            qa_model.eval()
             with torch.no_grad():
                 for i, data in enumerate(tqdm(test_loader)):
                     output = qa_model(input_ids=data[0].squeeze(dim=0).to(device), token_type_ids=data[1].squeeze(dim=0).to(device),
@@ -408,7 +361,7 @@ def main(args):
                     result = evaluate(data, output, tokenizer, device, max_seq_length, args.qa_doc_stride, split_paragraphs[TEST][i], tokenized_paragraphs[TEST][i].tokens)
                     results.append(result)
 
-            result_file = args.qa_pred_dir / "test.csv"
+            result_file = args.qa_pred_dir / f"test_mc_{args.mc_experiment_number}.csv"
             with open(result_file, 'w') as f:	
                 f.write("id,answer\n")
                 for i, result in enumerate(results):
@@ -482,16 +435,11 @@ def parse_args() -> Namespace:
     parser.add_argument("--qa_num_epoch", type=int, default=5)
 
     # Change "fp16_training" to True to support automatic mixed precision training (fp16)
-    parser.add_argument("--fp16_training", type=bool, default=False)
+    parser.add_argument("--fp16_training", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
 
     parser.add_argument("--mc_pretrained_model_name_or_path", type=str, default="bert-base-chinese")
     parser.add_argument("--qa_pretrained_model_name_or_path", type=str, default="bert-base-chinese")
-
-    # parser.add_argument("--do_mc_train", type=bool, default=False)
-    # parser.add_argument("--do_mc_test", type=bool, default=False)
-    # parser.add_argument("--do_qa_train", type=bool, default=True)
-    # parser.add_argument("--do_qa_test", type=bool, default=False)
     
     parser.add_argument("--do_mc_train", action="store_true", help="Run or not.")
     parser.add_argument("--do_mc_test", action="store_true", help="Run or not.")
