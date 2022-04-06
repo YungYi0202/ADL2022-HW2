@@ -18,21 +18,43 @@ from pathlib import Path
 
 from tqdm.auto import tqdm
 
-from utils import read_data, get_ending_names, swag_like_dataset
+from utils import read_data, get_ending_names, swag_like_dataset, TRAIN, DEV, TEST, SPLITS
 from dataset import DataCollatorForMultipleChoice, QA_Dataset
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "7"
 
 import csv
 
-TRAIN = "train"
-DEV = "valid"
-TEST = "test"
-SPLITS = [TRAIN, DEV]
 
-def multiple_choice(tokenizer, args, device, max_seq_length, splits, questions, candidate_paragraph_ids, relevant_paragraph_ids, paragraphs, ids):
+def get_max_seq_len(args, tokenizer):
+    # Set max length of tokenized data
+    if args.max_len is None:
+        max_seq_length = tokenizer.model_max_length
+        if max_seq_length > 1024:
+            logger.warning(
+                f"The tokenizer picked seems to have a very large `model_max_length` ({tokenizer.model_max_length}). "
+                "Picking 1024 instead. You can change that default value by passing --max_seq_length xxx."
+            )
+            max_seq_length = 1024
+    else:
+        if args.max_len > tokenizer.model_max_length:
+            logger.warning(
+                f"The max_seq_length passed ({args.max_len}) is larger than the maximum length for the"
+                f"model ({tokenizer.model_max_length}). Using max_seq_length={tokenizer.model_max_length}."
+            )
+        max_seq_length = min(args.max_len, tokenizer.model_max_length)
+    return max_seq_length
+
+def multiple_choice(args, device, splits, questions, candidate_paragraph_ids, relevant_paragraph_ids, paragraphs, ids):
     mc_model = AutoModelForMultipleChoice.from_pretrained(args.pretrained_model_name_or_path).to(device)
+    tokenizer = AutoTokenizer.from_pretrained(args.mc_pretrained_model_name_or_path)
+    max_seq_length = get_max_seq_len(args, tokenizer)
+    
+    print(f"mc_pretrained_model_name_or_path: {args.mc_pretrained_model_name_or_path}")
+    print(f"mc_resume_from_checkpoint: {args.mc_resume_from_checkpoint}")
+    print(f"mc_tokenizer.model_max_length: {tokenizer.model_max_length}")
+    
     # Function needed to tokenize data
     ending_names = get_ending_names()
     def preprocess_function(examples):
@@ -70,6 +92,8 @@ def multiple_choice(tokenizer, args, device, max_seq_length, splits, questions, 
             num_train_epochs=args.mc_num_epoch,
             weight_decay=0.01,
             gradient_accumulation_steps=args.mc_accu_grad,
+            load_best_model_at_end=True,
+            warmup_ratio=args.mc_warmup_ratio
         )
 
     trainer = Trainer(
@@ -85,8 +109,8 @@ def multiple_choice(tokenizer, args, device, max_seq_length, splits, questions, 
     if args.do_mc_train:   
         # =====Train=====
         checkpoint = None
-        if args.resume_from_checkpoint is not None:
-            checkpoint = args.resume_from_checkpoint
+        if args.mc_resume_from_checkpoint is not None:
+            checkpoint = args.mc_resume_from_checkpoint
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
         trainer.save_model()  # Saves the tokenizer too for easy upload
         metrics = train_result.metrics
@@ -117,8 +141,8 @@ def main(args):
     set_seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # device = "cuda:0"
-    if args.resume_from_checkpoint is not None:
-        args.pretrained_model_name_or_path = args.resume_from_checkpoint
+    if args.mc_resume_from_checkpoint is not None:
+        args.mc_pretrained_model_name_or_path = args.mc_resume_from_checkpoint
     
     do_mc = args.do_mc_train or args.do_mc_test
     do_qa = args.do_qa_train or args.do_qa_test
@@ -135,11 +159,6 @@ def main(args):
         accelerator = Accelerator(fp16=True)
         device = accelerator.device
     print(f"device: {device}")
-    print(f"pretrained_model_name_or_path: {args.pretrained_model_name_or_path}")
-    print(f"resume_from_checkpoint: {args.resume_from_checkpoint}")
-
-    # Models
-    tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path)
 
     data_paths = {split: args.data_dir / f"{split}.json" for split in splits}
     data = {split: read_data(path) for split, path in data_paths.items()}
@@ -152,33 +171,24 @@ def main(args):
     ids = {split: [sample["id"] for sample in data[split]] for split in splits}
     answers = {split: [sample["answer"] for sample in data[split]] for split in SPLITS} if do_qa else None
 
-    # Set max length of tokenized data
-    if args.max_len is None:
-        max_seq_length = tokenizer.model_max_length
-        if max_seq_length > 1024:
-            logger.warning(
-                f"The tokenizer picked seems to have a very large `model_max_length` ({tokenizer.model_max_length}). "
-                "Picking 1024 instead. You can change that default value by passing --max_seq_length xxx."
-            )
-            max_seq_length = 1024
-    else:
-        if args.max_len > tokenizer.model_max_length:
-            logger.warning(
-                f"The max_seq_length passed ({args.max_len}) is larger than the maximum length for the"
-                f"model ({tokenizer.model_max_length}). Using max_seq_length={tokenizer.model_max_length}."
-            )
-        max_seq_length = min(args.max_len, tokenizer.model_max_length)
-
+    
     mc_predictions = None
     if do_mc:
-        mc_predictions = multiple_choice(tokenizer, args, device, max_seq_length, splits, questions, candidate_paragraph_ids, relevant_paragraph_ids, paragraphs, ids)
+        mc_predictions = multiple_choice(args, device, splits, questions, candidate_paragraph_ids, relevant_paragraph_ids, paragraphs, ids)
     if do_qa:
-        qa_model = AutoModelForQuestionAnswering.from_pretrained(args.pretrained_model_name_or_path).to(device)
+        qa_model_path = args.qa_pretrained_model_name_or_path
+        if args.qa_resume:
+            qa_model_path = args.qa_ckpt_dir / "model"
+
+        qa_model = AutoModelForQuestionAnswering.from_pretrained(qa_model_path).to(device)
+        tokenizer = AutoTokenizer.from_pretrained(args.qa_pretrained_model_name_or_path)
+        max_seq_length = get_max_seq_len(args, tokenizer)
+
+        print(f"qa_model_path: {qa_model_path}")
+        print(f"qa_tokenizer.model_max_length: {tokenizer.model_max_length}")
         # TODO: concat mispredicted result.
-        wrong_predict_cnt = {split: 0 for split in SPLITS}
         
         def add_wrong_sample(split, i, pred_id):
-            wrong_predict_cnt[split] += 1
             questions[split].append(questions[split][i])
             relevant_paragraph_ids[split].append(pred_id)
             # Default value when there is no answer in the paragragh.
@@ -213,10 +223,31 @@ def main(args):
         # TODO: Check correctness
 
         tokenized_questions = {split: tokenizer(questions[split] , add_special_tokens=False) for split in splits}
-        tokenized_paragraphs = tokenizer(paragraphs, add_special_tokens=False)
+        tokenized_train_question = tokenizer(questions[TRAIN] , add_special_tokens=False) 
+
+        split_paragraphs = {split: [paragraphs[rel_id] for rel_id in relevant_paragraph_ids[split]] for split in splits}
+        for split in splits:
+            if split is not TRAIN:
+                # 取代' ' \u200b \u200e \u3000 # 是為了讓tokenize前後index一致
+                # 用✔ ● ✦ ☺ ☆ 當佔位符，沒有意義
+                split_paragraphs[split] = [i.replace(' ','✔').replace('\u200b','✦').replace('\u200e', '☺').replace('\u3000', '☆').replace('#','●') for i in split_paragraphs[split]]
+        
+        tokenized_paragraphs = {split: tokenizer(split_paragraphs[split], add_special_tokens=False) for split in splits}
+
+        print("*****Check*****")
+        for split in splits:
+            print(f"split: {split}")
+            print(f"questions: {len(questions[split])}")
+            print(f"relevant_paragraph_ids: {len(relevant_paragraph_ids[split])}")
+            print(f"tokenized_questions: {len(tokenized_questions[split])}")
+            print(f"tokenized_paragraphs: {len(tokenized_paragraphs[split])}")
+            if split in SPLITS:
+                print(f"answers: {len(answers[split])}")
+        print("***************")
+
 
         # train_qa_set = QA_Dataset(TRAIN, max_seq_length, args.qa_max_question_len, args.qa_doc_stride, answers[split], relevant_paragraph_ids[split], tokenized_questions[split], tokenized_paragraphs)
-        qa_sets = {split: QA_Dataset(str(split), max_seq_length, args.qa_max_question_len, args.qa_doc_stride, answers[split] if split in SPLITS else None, relevant_paragraph_ids[split], tokenized_questions[split], tokenized_paragraphs) for split in splits}
+        qa_sets = {split: QA_Dataset(str(split), len(questions[split]), max_seq_length, args.qa_max_question_len, args.qa_doc_stride, answers[split] if split in SPLITS else None, tokenized_questions[split], tokenized_paragraphs[split]) for split in splits}
 
         # Note: Do NOT change batch size of dev_loader / test_loader !
         # Although batch size=1, it is actually a batch consisting of several windows from the same QA pair
@@ -224,51 +255,115 @@ def main(args):
         dev_loader = DataLoader(qa_sets[DEV], batch_size=1, shuffle=False, pin_memory=True)
         test_loader = DataLoader(qa_sets[TEST], batch_size=1, shuffle=False, pin_memory=True) if args.do_qa_test else None
 
-        def evaluate(data, output):
+        def index_before_tokenize(tokens, start, end):
+            char_count, new_start, new_end = 0, max_seq_length, max_seq_length
+            start_flag = 0
+            end_flag = 0
+                
+            for i, token in enumerate(tokens):
+                if token == '[UNK]' or token == '[CLS]' or token == '[SEP]':
+                    if i == start:
+                        new_start = char_count
+                    if i == end:
+                        new_end = char_count
+                    char_count += 1
+                else:
+                    for c in token:
+                        if i == start and start_flag == 0:
+                            #print(token)
+                            new_start = char_count
+                            start_flag = 1
+                        if i == end:
+                            #print(token)
+                            new_end = char_count
+                            end_flag = 1
+                        if c != '#':
+                            char_count += 1
+            return new_start, new_end
+
+        def evaluate(data, output, doc_stride, paragraph=None, paragraph_tokenized=None):
             ##### TODO: Postprocessing #####
             # There is a bug and room for improvement in postprocessing 
             # Hint: Open your prediction file to see what is wrong 
             
+            # Load all data into GPU
+            data = [i.to(device) for i in data]
+
             answer = ''
             max_prob = float('-inf')
             num_of_windows = data[0].shape[1]
             
+            # index in the whole tokens (not just relative to window)
+            entire_start_index = 0
+            entire_end_index = 0
+            
             for k in range(num_of_windows):
+                #print('window',k)
                 # Obtain answer by choosing the most probable start position / end position
-                start_prob, start_index = torch.max(output.start_logits[k], dim=0)
-                end_prob, end_index = torch.max(output.end_logits[k], dim=0)
+                mask = data[1][0][k].bool() &  data[2][0][k].bool() # token type & attention mask
                 
+                masked_output_start = torch.masked_select(output.start_logits[k], mask)[:-1] # -1 is [SEP]
+                start_prob, start_index = torch.max(masked_output_start, dim=0)
+                #masked_output_end = torch.masked_select(output.end_logits[k], mask)[start_index:-1] # -1 is [SEP]
+                masked_output_end = torch.masked_select(output.end_logits[k], mask)[:-1] # -1 is [SEP]
+                end_prob, end_index = torch.max(masked_output_end, dim=0)
+                #end_index += start_index 
+                
+
                 # Probability of answer is calculated as sum of start_prob and end_prob
                 prob = start_prob + end_prob
-                
-                if end_index < start_index:
-                    tmp = end_index
-                    end_index = start_index
-                    start_index = tmp
-                    
+                masked_data = torch.masked_select(data[0][0][k], mask)[:-1] # -1 is [SEP]
+
                 # Replace answer if calculated probability is larger than previous windows
-                if prob > max_prob:
+                if (prob > max_prob) and (end_index - start_index <= 40) and (end_index > start_index):
                     max_prob = prob
+                    entire_start_index = start_index.item() + doc_stride * k
+                    entire_end_index = end_index.item() + doc_stride * k
+                    #print('entire_start_index',entire_start_index)
+                    #print('entire_end_index',entire_end_index)
                     # Convert tokens to chars (e.g. [1920, 7032] --> "大 金")
-                    answer = tokenizer.decode(data[0][0][k][start_index : end_index + 1])
+                    answer = tokenizer.decode(masked_data[start_index : end_index + 1])
+                    # Remove spaces in answer (e.g. "大 金" --> "大金")
+                    answer = answer.replace('✔', ' ').replace('✦','\u200b').replace('☺','\u200e').replace('☆','\u3000').replace('●','#').replace(' ','')
+
             
-            # Remove spaces in answer (e.g. "大 金" --> "大金")
-            return answer.replace(' ','')
+            # if [UNK] in prediction, use orignal span of paragrah
+            if '[UNK]' in answer:
+                print('found [UNK] in prediction, using original text')
+                print('original prediction', answer)
+                # find the index of answer in the orinal paragrah
+
+                new_start, new_end = index_before_tokenize(tokens=paragraph_tokenized, 
+                                                        start=entire_start_index, end=entire_end_index)
+                #print('new_start',new_start)
+                #print('new_end',new_end)
+                answer = paragraph[new_start:new_end+1]
+                answer = answer.replace('✔', ' ').replace('✦','\u200b').replace('☺','\u200e').replace('☆','\u3000').replace('●','#')
+                print('final prediction:',answer)
+            
+            return answer
 
         if args.do_qa_train:
             optimizer = AdamW(qa_model.parameters(), lr=args.qa_lr)
-            total_steps = len(train_loader) * num_epoch
-            scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps= 2000, # Default value
-                                                num_training_steps=total_steps)
-            logging_step = 500
-            qa_model.train()
-            print("Start Training ...")
+            total_steps = len(train_loader) * args.qa_num_epoch
+            warmup_steps = int(total_steps * args.qa_warmup_ratio)
+            scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps= warmup_steps, num_training_steps=total_steps)
             
+            if args.qa_resume:
+                # TODO: optimizer, scheduler
+                pass
+            
+            qa_model.train()
+            print(f"Start Training ... total steps: {total_steps}")
+            
+            best_val_acc = 0.0
+
             for epoch in range(args.qa_num_epoch):
                 step = 1
                 train_loss = train_acc = 0.0
                 
-                for data in tqdm(train_loader):	
+                for batch_idx, data in enumerate(tqdm(train_loader)):	
+                    
                     # Load all data into GPU
                     data = [i.to(device) for i in data]
                     
@@ -289,16 +384,23 @@ def main(args):
                     
                     output.loss.backward()
                     
-                    optimizer.step()
-                    scheduler.step()
-                    optimizer.zero_grad()
+                    # optimizer.step()
+                    # scheduler.step()
+                    # optimizer.zero_grad()
+
+                    if ((batch_idx + 1) % args.qa_accu_grad == 0) or (batch_idx + 1 == len(train_loader)):
+                        optimizer.step()
+                        optimizer.zero_grad()
+                        for i in range(args.qa_accu_grad):
+                            scheduler.step()
+
                     step += 1
 
                     ##### TODO: Apply linear learning rate decay #####
                     
                     # Print training loss and accuracy over past logging step
-                    if step % logging_step == 0:
-                        print(f"Epoch {epoch + 1} | Step {step} | loss = {train_loss.item() / logging_step:.3f}, acc = {train_acc / logging_step:.3f}")
+                    if step % args.qa_logging_step == 0:
+                        print(f"Epoch {epoch + 1} | Step {step} | loss = {train_loss.item() / args.qa_logging_step:.3f}, acc = {train_acc / args.qa_logging_step:.3f}")
                         train_loss = train_acc = 0
 
                 print("Evaluating Dev Set ...")
@@ -309,30 +411,54 @@ def main(args):
                         output = qa_model(input_ids=data[0].squeeze(dim=0).to(device), token_type_ids=data[1].squeeze(dim=0).to(device),
                             attention_mask=data[2].squeeze(dim=0).to(device))
                         # prediction is correct only if answer text exactly matches
-                        result = evaluate(data, output)
+                        result = evaluate(data, output, args.qa_doc_stride, split_paragraphs[DEV][i], tokenized_paragraphs[DEV][i].tokens)
                         dev_acc += result == answers[DEV][i]["text"]
-                        print(f"result: {result} answer: {answers[DEV][i]['text']}")
+                        if i % args.qa_logging_step == 0: 
+                            print(f"id:{ids[DEV][i]} result: {result} answer: {answers[DEV][i]['text']}")
+                    
                     print(f"Validation | Epoch {epoch + 1} | acc = {dev_acc / len(dev_loader):.3f}")
-                qa_model.train()
 
-            # Save a model and its configuration file to the directory 「saved_model」 
-            # i.e. there are two files under the direcory 「saved_model」: 「pytorch_model.bin」 and 「config.json」
-            # Saved model can be re-loaded using 「model = BertForQuestionAnswering.from_pretrained("saved_model")」
-            print("Saving Model ...")
-            model_save_dir = args.qa_ckpt_dir 
-            qa_model.save_pretrained(model_save_dir)
+                    if dev_acc / len(dev_loader) > best_val_acc:
+                        best_val_acc = dev_acc / len(dev_loader)
+                        # Save a model and its configuration file to the directory 「saved_model」 
+                        # i.e. there are two files under the direcory 「saved_model」: 「pytorch_model.bin」 and 「config.json」
+                        # Saved model can be re-loaded using 「model = BertForQuestionAnswering.from_pretrained("saved_model")」
+                        print("Saving Model ...")
+                        qa_model.save_pretrained(args.qa_ckpt_dir / "model")
+
+                        torch.save(optimizer.state_dict(), args.qa_ckpt_dir / "optimizer.pt")
+                        torch.save(scheduler.state_dict(), args.qa_ckpt_dir / "scheduler.pt")    
+                
+                qa_model.train()    
+            
 
         if args.do_qa_test:
-            print("Evaluating Test Set ...")
-
+            qa_model.eval()
             results = []
+            
+            if not args.do_qa_train:
+                print("Evaluating Dev Set for check...")
+                with torch.no_grad():
+                    dev_acc = 0.0
+                    for i, data in enumerate(tqdm(dev_loader)):
+                        output = qa_model(input_ids=data[0].squeeze(dim=0).to(device), token_type_ids=data[1].squeeze(dim=0).to(device),
+                            attention_mask=data[2].squeeze(dim=0).to(device))
+                        # prediction is correct only if answer text exactly matches
+                        result = evaluate(data, output, args.qa_doc_stride, split_paragraphs[DEV][i], tokenized_paragraphs[DEV][i].tokens)
+                        dev_acc += result == answers[DEV][i]["text"]
+                        if i % args.qa_logging_step == 0: 
+                            print(f"id:{ids[DEV][i]} result: {result} answer: {answers[DEV][i]['text']}")
+                    
+                    print(f"Validation | Epoch last | acc = {dev_acc / len(dev_loader):.3f}")
 
-            model.eval()
+            print("Evaluating Test Set ...")
+            
             with torch.no_grad():
                 for i, data in enumerate(tqdm(test_loader)):
                     output = qa_model(input_ids=data[0].squeeze(dim=0).to(device), token_type_ids=data[1].squeeze(dim=0).to(device),
                                 attention_mask=data[2].squeeze(dim=0).to(device))
-                    results.append(evaluate(data, output))
+                    result = evaluate(data, output, args.qa_doc_stride, split_paragraphs[TEST][i], tokenized_paragraphs[TEST][i].tokens)
+                    results.append(result)
 
             result_file = args.qa_pred_dir / "test.csv"
             with open(result_file, 'w') as f:	
@@ -390,7 +516,8 @@ def parse_args() -> Namespace:
     # mc
     parser.add_argument("--mc_batch_size", type=int, default=1)
     parser.add_argument("--mc_accu_grad", type=int, default=8)
-    parser.add_argument("--check_val_every_step", type=int, default=1000)
+    parser.add_argument("--check_val_every_step", type=int, default=500)
+    parser.add_argument("--mc_warmup_ratio", type=float, default=0.0)
     
     parser.add_argument("--num_workers", type=int, default=2)
 
@@ -399,16 +526,20 @@ def parse_args() -> Namespace:
     parser.add_argument("--qa_accu_grad", type=int, default=8)
     parser.add_argument("--qa_max_question_len", type=int, default=40)
     parser.add_argument("--qa_doc_stride", type=int, default=150)
+    parser.add_argument("--qa_warmup_ratio", type=float, default=0.1)
+    parser.add_argument("--qa_logging_step", type=int, default=500)
+    
 
     # training
-    parser.add_argument("--mc_num_epoch", type=int, default=5)
+    parser.add_argument("--mc_num_epoch", type=int, default=4)
     parser.add_argument("--qa_num_epoch", type=int, default=5)
 
     # Change "fp16_training" to True to support automatic mixed precision training (fp16)
     parser.add_argument("--fp16_training", type=bool, default=False)
     parser.add_argument("--seed", type=int, default=0)
 
-    parser.add_argument("--pretrained_model_name_or_path", type=str, default="bert-base-chinese")
+    parser.add_argument("--mc_pretrained_model_name_or_path", type=str, default="bert-base-chinese")
+    parser.add_argument("--qa_pretrained_model_name_or_path", type=str, default="bert-base-chinese")
 
     # parser.add_argument("--do_mc_train", type=bool, default=False)
     # parser.add_argument("--do_mc_test", type=bool, default=False)
@@ -421,7 +552,8 @@ def parse_args() -> Namespace:
     parser.add_argument("--do_qa_test", action="store_true", help="Run or not.")
     parser.add_argument("--qa_train_with_mispredict", action="store_true", help="Run or not.")
 
-    parser.add_argument("--resume_from_checkpoint", type=str, default=None)
+    parser.add_argument("--mc_resume_from_checkpoint", type=str, default=None)
+    parser.add_argument("--qa_resume", action="store_true", help="Run or not.")
 
     args = parser.parse_args()
     return args

@@ -3,6 +3,12 @@ import torch
 import numpy as np
 import json
 from datasets import Dataset, DatasetDict
+
+TRAIN = "train"
+DEV = "valid"
+TEST = "test"
+SPLITS = [TRAIN, DEV]
+
 # Fix random seed for reproducibility
 def same_seeds(seed):
     torch.manual_seed(seed)

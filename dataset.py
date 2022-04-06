@@ -3,7 +3,8 @@ from transformers.tokenization_utils_base import PreTrainedTokenizerBase, Paddin
 from typing import Optional, Union
 import torch
 from datasets import Dataset
-
+from random import randint
+from utils import TRAIN, DEV, TEST, SPLITS
 
 @dataclass
 class DataCollatorForMultipleChoice:
@@ -39,12 +40,11 @@ class DataCollatorForMultipleChoice:
         return batch
 
 class QA_Dataset(Dataset):
-    def __init__(self, split, max_seq_len, max_question_len, doc_stride, answers, relevant_paragraph_ids, tokenized_questions, tokenized_paragraphs):
+    def __init__(self, split, size, max_seq_len, max_question_len, doc_stride, answers, tokenized_questions, tokenized_paragraphs):
         self.mysplit = split
         self.answers = answers
-        self.relevant_paragraph_ids = relevant_paragraph_ids
-        if answers is not None:
-            assert len(answers) == len(relevant_paragraph_ids)
+        self.size = size
+
         self.tokenized_questions = tokenized_questions
         self.tokenized_paragraphs = tokenized_paragraphs
         
@@ -60,21 +60,19 @@ class QA_Dataset(Dataset):
 
         ##### TODO: Change value of doc_stride #####
         self.doc_stride = doc_stride
-        
 
     def __len__(self):
-        return len(self.answers)
+        return self.size
 
     def __getitem__(self, idx):
         answer = self.answers[idx] if self.answers is not None else None
-        relevant_paragraph_id = self.relevant_paragraph_ids[idx]
         tokenized_question = self.tokenized_questions[idx]
-        tokenized_paragraph = self.tokenized_paragraphs[relevant_paragraph_id]
-
+        tokenized_paragraph = self.tokenized_paragraphs[idx]
+        
         ##### TODO: Preprocessing #####
         # Hint: How to prevent model from learning something it should not learn
 
-        if self.mysplit == "train":
+        if self.mysplit == TRAIN:
             try:
                 # Convert answer's start/end positions in paragraph_text to start/end positions in tokenized_paragraph  
                 answer_start_token = tokenized_paragraph.char_to_token(answer["start"])
@@ -84,11 +82,15 @@ class QA_Dataset(Dataset):
                 # A single window is obtained by slicing the portion of paragraph containing the answer
                 # mid = (answer_start_token + answer_end_token) // 2
                 # paragraph_start = max(0, min(mid - self.max_paragraph_len // 2, len(tokenized_paragraph) - self.max_paragraph_len))
-                if answer_start_token >  self.max_paragraph_len:
-                    # paragraph_start 不能從0開始
-                    paragraph_start = min(answer_start_token - self.max_paragraph_len // 2, len(tokenized_paragraph) - self.max_paragraph_len)
-                else:
-                    paragraph_start = 0
+                
+                # if answer_start_token >  self.max_paragraph_len:
+                #     # paragraph_start 不能從0開始
+                #     paragraph_start = min(answer_start_token - self.max_paragraph_len // 2, len(tokenized_paragraph) - self.max_paragraph_len)
+                # else:
+                #     paragraph_start = 0
+                
+                paragraph_start = max(0, answer_start_token - randint(0, self.max_paragraph_len - (answer_end_token - answer_start_token + 1)))
+
                 paragraph_end = paragraph_start + self.max_paragraph_len
                 
                 # Slice question/paragraph and add special tokens (101: CLS, 102: SEP)
