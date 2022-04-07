@@ -23,7 +23,7 @@ from dataset import DataCollatorForMultipleChoice, QA_Dataset
 from scheduler import get_cosine_schedule_with_warmup
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "7"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 import csv
 
@@ -48,7 +48,7 @@ def get_max_seq_len(args, tokenizer):
     return max_seq_length
 
 def multiple_choice(args, device, splits, questions, candidate_paragraph_ids, relevant_paragraph_ids, paragraphs, ids):
-    mc_model = AutoModelForMultipleChoice.from_pretrained(args.pretrained_model_name_or_path).to(device)
+    mc_model = AutoModelForMultipleChoice.from_pretrained(args.mc_pretrained_model_name_or_path).to(device)
     tokenizer = AutoTokenizer.from_pretrained(args.mc_pretrained_model_name_or_path)
     max_seq_length = get_max_seq_len(args, tokenizer)
     
@@ -124,7 +124,8 @@ def multiple_choice(args, device, splits, questions, candidate_paragraph_ids, re
     
     if args.do_mc_test:
         all_predictions = dict()
-        for split in splits:
+        # for split in splits:
+        for split in [TEST]:
             with open(args.mc_pred_dir / f"{split}.csv","a+") as f:
                 print(f"Predicting split {split}...")
                 predictions, _, _ = trainer.predict(test_dataset=tokenized_mc_data[split])
@@ -241,21 +242,25 @@ def qa_train_epoch(epoch, args, qa_model, train_loader, optimizer, scheduler, de
             train_loss = train_acc = 0
     return step
 
-def qa_dev_epoch(epoch, args, qa_model, dev_loader, device, tokenizer, max_seq_length, split_paragraphs, tokenized_paragraphs, ids, answers, best_val_acc=None):
+def qa_dev_epoch(epoch, args, qa_model, dev_loader, optimizer, scheduler, device, tokenizer, max_seq_length, split_paragraphs, tokenized_paragraphs, ids, answers, best_val_acc=None, best_val_loss=None):
     print("Evaluating Dev Set ...")
     qa_model.eval()
+    valid_loss = 0.0
+
     with torch.no_grad():
         dev_acc = 0.0
         for i, data in enumerate(tqdm(dev_loader)):
             output = qa_model(input_ids=data[0].squeeze(dim=0).to(device), token_type_ids=data[1].squeeze(dim=0).to(device),
                 attention_mask=data[2].squeeze(dim=0).to(device))
+            valid_loss += output.loss
+
             # prediction is correct only if answer text exactly matches
             result = evaluate(data, output, tokenizer, device, max_seq_length, args.qa_doc_stride, split_paragraphs[DEV][i], tokenized_paragraphs[DEV][i].tokens)
             dev_acc += result == answers[DEV][i]["text"]
             if i % args.qa_logging_step == 0: 
                 print(f"id:{ids[DEV][i]} result: {result} answer: {answers[DEV][i]['text']}")
         
-        print(f"Validation | Epoch {epoch + 1} | acc = {dev_acc / len(dev_loader):.3f}")
+        print(f"Validation | Epoch {epoch + 1} | loss = {valid_loss.item() / len(dev_loader):.3f}| acc = {dev_acc / len(dev_loader):.3f}")
 
         if best_val_acc != None and dev_acc / len(dev_loader) > best_val_acc:
             best_val_acc = dev_acc / len(dev_loader)
@@ -266,7 +271,14 @@ def qa_dev_epoch(epoch, args, qa_model, dev_loader, device, tokenizer, max_seq_l
             qa_model.save_pretrained(args.qa_ckpt_dir / "model")
             torch.save(optimizer.state_dict(), args.qa_ckpt_dir / "optimizer.pt")
             torch.save(scheduler.state_dict(), args.qa_ckpt_dir / "scheduler.pt") 
-    return best_val_acc
+        elif best_val_loss != None and valid_loss.item() / len(dev_loader) < best_val_loss:
+            best_val_loss = valid_loss.item() / len(dev_loader)
+            print("Saving Model ...")
+            qa_model.save_pretrained(args.qa_ckpt_dir / "model")
+            torch.save(optimizer.state_dict(), args.qa_ckpt_dir / "optimizer.pt")
+            torch.save(scheduler.state_dict(), args.qa_ckpt_dir / "scheduler.pt")
+        
+    return best_val_acc, best_val_loss
 
 def main(args):
     set_seed(args.seed)
@@ -330,8 +342,12 @@ def main(args):
             total_steps = len(train_loader) * args.qa_num_epoch
             warmup_steps = int(total_steps * args.qa_warmup_ratio)
             
-            # scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps= warmup_steps, num_training_steps=total_steps)
-            scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
+            if args.qa_scheduler == "linear":
+                print("scheduler: linear")
+                scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps= warmup_steps, num_training_steps=total_steps)
+            else:
+                print("scheduler: cosine")
+                scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
             
             if args.qa_resume:
                 optimizer.load_state_dict(args.qa_ckpt_dir / "optimizer.pt")
@@ -340,17 +356,18 @@ def main(args):
             print(f"Start Training ... total steps: {total_steps}")
             
             best_val_acc = 0.0
+            best_val_loss = 1000000000000.0
             for epoch in range(args.qa_num_epoch):
                 step = 1
                 step += qa_train_epoch(epoch, args, qa_model, train_loader, optimizer, scheduler, device)
-                best_val_acc = qa_dev_epoch(epoch, args, qa_model, dev_loader, device, tokenizer, max_seq_length, split_paragraphs, tokenized_paragraphs, ids, answers, best_val_acc)
+                best_val_acc, best_val_loss = qa_dev_epoch(epoch, args, qa_model, dev_loader, optimizer, scheduler, device, tokenizer, max_seq_length, split_paragraphs, tokenized_paragraphs, ids, answers, best_val_acc, best_val_loss)
 
         if args.do_qa_test:
             results = []
             
-            if not args.do_qa_train:
+            if (not args.do_qa_train) and args.qa_test_with_precheck:
                 print("Evaluating Dev Set for check...")
-                qa_dev_epoch("last", args, qa_model, dev_loader, device, tokenizer, max_seq_length, split_paragraphs, tokenized_paragraphs, ids, answers, None)
+                qa_dev_epoch("last", args, qa_model, dev_loader, optimizer, scheduler, device, tokenizer, max_seq_length, split_paragraphs, tokenized_paragraphs, ids, answers)
 
             print("Evaluating Test Set ...")
             qa_model.eval()
@@ -428,6 +445,7 @@ def parse_args() -> Namespace:
     parser.add_argument("--qa_doc_stride", type=int, default=150)
     parser.add_argument("--qa_warmup_ratio", type=float, default=0.1)
     parser.add_argument("--qa_logging_step", type=int, default=500)
+    parser.add_argument("--qa_scheduler", type=str, default="linear")
     
 
     # training
@@ -449,6 +467,7 @@ def parse_args() -> Namespace:
 
     parser.add_argument("--mc_resume_from_checkpoint", type=str, default=None)
     parser.add_argument("--qa_resume", action="store_true", help="Run or not.")
+    parser.add_argument("--qa_test_with_precheck", action="store_true", help="Run or not.")
 
     args = parser.parse_args()
     return args
