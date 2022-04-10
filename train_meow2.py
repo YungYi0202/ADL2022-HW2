@@ -23,7 +23,7 @@ from dataset import DataCollatorForMultipleChoice, QA_Dataset
 from scheduler import get_cosine_schedule_with_warmup
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 
 import csv
 

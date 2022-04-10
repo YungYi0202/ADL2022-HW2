@@ -146,5 +146,12 @@ def evaluate(data, output, tokenizer, device, max_seq_length, doc_stride, paragr
         answer = answer.replace('✔', ' ').replace('✦','\u200b').replace('☺','\u200e').replace('☆','\u3000').replace('●','#')
         print('final prediction:',answer)
     
+    if answer[0:3] == '「' and answer[-3:] == '」':
+        answer =  answer[3:-3]
+    elif answer[0:3] == "「" and answer.find("」") == -1 :
+        answer =  answer[3:]
+    elif answer[-3:] == "」" and answer.find("「") == -1:
+        answer =  answer[:-3]
+    
     return answer
 # ***** End - For QA ******
