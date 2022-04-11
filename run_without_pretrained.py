@@ -273,6 +273,15 @@ def qa_dev_epoch(epoch, args, qa_model, dev_loader, optimizer, scheduler, device
 
         return dev_acc / len(dev_loader)
 
+def save_models(args, qa_model, optimizer, scheduler):
+    # Save a model and its configuration file to the directory 「saved_model」 
+    # i.e. there are two files under the direcory 「saved_model」: 「pytorch_model.bin」 and 「config.json」
+    # Saved model can be re-loaded using 「model = BertForQuestionAnswering.from_pretrained("saved_model")」
+    print("Saving Model ...")
+    qa_model.save_pretrained(args.qa_ckpt_dir / "model")
+    torch.save(optimizer.state_dict(), args.qa_ckpt_dir / "optimizer.pt")
+    torch.save(scheduler.state_dict(), args.qa_ckpt_dir / "scheduler.pt") 
+    
 def main(args):
     set_seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -318,7 +327,7 @@ def main(args):
         else:
             qa_model_path = BertConfig()
             qa_model = BertForQuestionAnswering(qa_model_path).to(device)
-            
+
         tokenizer = AutoTokenizer.from_pretrained(args.qa_pretrained_model_name_or_path)
         max_seq_length = get_max_seq_len(args, tokenizer)
 
@@ -394,7 +403,7 @@ def main(args):
                     result = evaluate(data, output, tokenizer, device, max_seq_length, args.qa_doc_stride, split_paragraphs[TEST][i], tokenized_paragraphs[TEST][i].tokens)
                     results.append(result)
 
-            result_file = args.qa_pred_dir / f"test_mc_{args.mc_experiment_number}.csv"
+            result_file = args.qa_pred_dir / f"test_qa_{args.qa_experiment_number}_mc_{args.mc_experiment_number}.csv"
             with open(result_file, 'w') as f:	
                 f.write("id,answer\n")
                 for i, result in enumerate(results):
