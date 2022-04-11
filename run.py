@@ -385,6 +385,8 @@ def main(args):
         if args.do_qa_test:
             results = []
             
+            qa_model = AutoModelForQuestionAnswering.from_pretrained(args.qa_ckpt_dir / "model").to(device)
+            
             if (not args.do_qa_train) and args.qa_test_with_precheck:
                 print("Evaluating Dev Set for check...")
                 qa_dev_epoch("last", args, qa_model, dev_loader, optimizer, scheduler, device, tokenizer, max_seq_length, split_paragraphs, tokenized_paragraphs, ids, answers)
