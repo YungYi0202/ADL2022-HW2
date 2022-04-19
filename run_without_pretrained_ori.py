@@ -1,12 +1,14 @@
 import numpy as np
 import random
 import torch
-from torch.utils.data import DataLoader, Dataset 
+from torch.utils.data import DataLoader, Dataset
 from transformers import (
     AdamW, 
     AutoTokenizer, 
-    AutoModelForQuestionAnswering, 
+    AutoModelForQuestionAnswering,
     AutoModelForMultipleChoice, 
+    BertForQuestionAnswering, 
+    BertConfig,
     TrainingArguments, 
     Trainer,
     set_seed,
@@ -23,7 +25,7 @@ from dataset import DataCollatorForMultipleChoice, QA_Dataset
 from scheduler import get_cosine_schedule_with_warmup
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "6"
+os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 
 import csv
 
@@ -100,8 +102,8 @@ def multiple_choice(args, device, splits, questions, candidate_paragraph_ids, re
     trainer = Trainer(
         model=mc_model,
         args=training_args,
-        train_dataset=(tokenized_mc_data[TRAIN] if TRAIN in splits else None),
-        eval_dataset=(tokenized_mc_data[DEV] if DEV in splits else None),
+        train_dataset=tokenized_mc_data[TRAIN],
+        eval_dataset=tokenized_mc_data[DEV],
         tokenizer=tokenizer,
         data_collator=DataCollatorForMultipleChoice(tokenizer=tokenizer),
         compute_metrics=mc_compute_metrics,
@@ -131,10 +133,9 @@ def multiple_choice(args, device, splits, questions, candidate_paragraph_ids, re
                 predictions, _, _ = trainer.predict(test_dataset=tokenized_mc_data[split])
                 preds = np.argmax(predictions, axis=1)
                 all_predictions[split] = [ candidate_paragraph_ids[split][i][pred_label] for i, pred_label in enumerate(preds)]
-                if not (args.pipeline and (args.do_qa_train or args.do_qa_test)):
-                    writer = csv.writer(f)
-                    for i, pred_label in enumerate(preds):
-                        writer.writerow([ids[split][i], candidate_paragraph_ids[split][i][pred_label]])
+                writer = csv.writer(f)
+                for i, pred_label in enumerate(preds):
+                    writer.writerow([ids[split][i], candidate_paragraph_ids[split][i][pred_label]])
         return all_predictions
     else:
         return None
@@ -151,7 +152,7 @@ def concat_mc_result(args, splits, mc_predictions, questions, relevant_paragraph
     if mc_predictions == None:
         # Read from mc_pred_dir
         for split in splits:
-            if not args.qa_train_with_mispredict and split != TEST:
+            if not args.do_qa_train and split in SPLITS:
                 continue
             with open(args.mc_pred_dir / f"{split}.csv", 'r') as f:
                 rows = csv.reader(f)
@@ -163,8 +164,6 @@ def concat_mc_result(args, splits, mc_predictions, questions, relevant_paragraph
                         if not pred_id == answer_id:
                             add_wrong_sample(split, i, pred_id)
     else:
-        # print("*****mc_predictions*****")
-        # print(mc_predictions)
         for split in splits:
             if split == TEST:
                 relevant_paragraph_ids[split] = [pred_id for pred_id in mc_predictions[split]]
@@ -175,6 +174,12 @@ def concat_mc_result(args, splits, mc_predictions, questions, relevant_paragraph
 
 
 def qa_get_dataloaders(args, splits, tokenizer, paragraphs, questions, relevant_paragraph_ids, answers, max_seq_length):
+    if args.qa_stop_valid and DEV in splits:
+        splits.remove(DEV)
+        questions[TRAIN] += questions[DEV]
+        relevant_paragraph_ids[TRAIN] += relevant_paragraph_ids[DEV]
+        answers[TRAIN] += answers[DEV]
+
     tokenized_questions = {split: tokenizer(questions[split] , add_special_tokens=False) for split in splits}
 
     split_paragraphs = {split: [paragraphs[rel_id] for rel_id in relevant_paragraph_ids[split]] for split in splits}
@@ -199,8 +204,8 @@ def qa_get_dataloaders(args, splits, tokenizer, paragraphs, questions, relevant_
 
     # Note: Do NOT change batch size of dev_loader / test_loader !
     # Although batch size=1, it is actually a batch consisting of several windows from the same QA pair
-    train_loader = DataLoader(qa_sets[TRAIN], batch_size=args.qa_batch_size, shuffle=True, pin_memory=True) if TRAIN in splits else None
-    dev_loader = DataLoader(qa_sets[DEV], batch_size=1, shuffle=False, pin_memory=True) if DEV in splits else None
+    train_loader = DataLoader(qa_sets[TRAIN], batch_size=args.qa_batch_size, shuffle=True, pin_memory=True)
+    dev_loader = None if args.qa_stop_valid else DataLoader(qa_sets[DEV], batch_size=1, shuffle=False, pin_memory=True)
     test_loader = DataLoader(qa_sets[TEST], batch_size=1, shuffle=False, pin_memory=True) if args.do_qa_test else None
 
     return train_loader, dev_loader, test_loader, split_paragraphs, tokenized_paragraphs
@@ -253,6 +258,7 @@ def qa_train_epoch(epoch, args, qa_model, train_loader, optimizer, scheduler, de
 
     return train_losses, train_accs
 
+#def qa_dev_epoch(epoch, args, qa_model, dev_loader, optimizer, scheduler, device, tokenizer, max_seq_length, split_paragraphs, tokenized_paragraphs, ids, answers, best_val_acc=None, best_val_loss=None):
 def qa_dev_epoch(epoch, args, qa_model, dev_loader, optimizer, scheduler, device, tokenizer, max_seq_length, split_paragraphs, tokenized_paragraphs, ids, answers):
     print("Evaluating Dev Set ...")
     qa_model.eval()
@@ -282,7 +288,7 @@ def save_models(args, qa_model, optimizer, scheduler):
     qa_model.save_pretrained(args.qa_ckpt_dir / "model")
     torch.save(optimizer.state_dict(), args.qa_ckpt_dir / "optimizer.pt")
     torch.save(scheduler.state_dict(), args.qa_ckpt_dir / "scheduler.pt") 
-    
+
 def main(args):
     set_seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -292,16 +298,12 @@ def main(args):
     
     do_mc = args.do_mc_train or args.do_mc_test
     do_qa = args.do_qa_train or args.do_qa_test
-    do_only_test = not (args.do_mc_train or args.do_qa_train)
     print(f"args.do_mc_train: {args.do_mc_train}")
     print(f"args.do_mc_test: {args.do_mc_test}")
     print(f"args.do_qa_train: {args.do_qa_train}")
     print(f"args.do_qa_test: {args.do_qa_test}")
     
     splits = SPLITS + [TEST] if args.do_mc_test or args.do_qa_test else SPLITS
-    if do_only_test:
-        splits = [TEST]
-    
     print(f"splits: {splits}")
         
     if args.fp16_training:
@@ -310,33 +312,31 @@ def main(args):
         device = accelerator.device
     print(f"device: {device}")
 
-    if do_only_test and args.specified_test_path is not None:
-        data_paths = {TEST: args.specified_test_path}
-    else:
-        data_paths = {split: args.data_dir / f"{split}.json" for split in splits}
+    data_paths = {split: args.data_dir / f"{split}.json" for split in splits}
     data = {split: read_data(path) for split, path in data_paths.items()}
-    
-    if args.specified_context_path is None:
-        paragraphs = read_data(args.data_dir / "context.json")  
-    else:
-        paragraphs = read_data(args.specified_context_path)  
+    paragraphs = read_data(args.data_dir / "context.json")  
     
     # Classfiy data
     questions = {split: [sample["question"] for sample in data[split]] for split in splits}
     candidate_paragraph_ids = {split: [sample["paragraphs"] for sample in data[split]] for split in splits} if do_mc else None
-    relevant_paragraph_ids = {split: [sample["relevant"] for sample in data[split]] for split in SPLITS} if not do_only_test else dict()
+    relevant_paragraph_ids = {split: [sample["relevant"] for sample in data[split]] for split in SPLITS}
     ids = {split: [sample["id"] for sample in data[split]] for split in splits}
-    answers = {split: [sample["answer"] for sample in data[split]] for split in SPLITS} if (do_qa and not do_only_test)  else None
+    answers = {split: [sample["answer"] for sample in data[split]] for split in SPLITS} if do_qa else None
     
     mc_predictions = None
     if do_mc:
         mc_predictions = multiple_choice(args, device, splits, questions, candidate_paragraph_ids, relevant_paragraph_ids, paragraphs, ids)
     if do_qa:
-        qa_model_path = args.qa_pretrained_model_name_or_path
         if args.qa_resume:
             qa_model_path = args.qa_ckpt_dir / "model"
+            qa_model = BertForQuestionAnswering.from_pretrained(qa_model_path).to(device)
+        else:
+            # qa_model_path = BertConfig()
+            # qa_model = AutoModelForQuestionAnswering(qa_model_path).to(device)
+            qa_model_path = args.qa_pretrained_model_name_or_path
+            qa_model = AutoModelForQuestionAnswering.from_pretrained(qa_model_path).to(device)
 
-        qa_model = AutoModelForQuestionAnswering.from_pretrained(qa_model_path).to(device)
+        
         tokenizer = AutoTokenizer.from_pretrained(args.qa_pretrained_model_name_or_path)
         max_seq_length = get_max_seq_len(args, tokenizer)
 
@@ -364,8 +364,12 @@ def main(args):
                 scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
             
             if args.qa_resume:
-                optimizer.load_state_dict(args.qa_ckpt_dir / "optimizer.pt")
-                scheduler.load_state_dict(args.qa_ckpt_dir / "scheduler.pt")
+                optim_ckpt = os.path.join(args.qa_ckpt_dir,"optimizer.pt")
+                scheduler_ckpt = os.path.join(args.qa_ckpt_dir,"scheduler.pt")
+                print(f"Reload optimizer and scheduler from {optim_ckpt} and {scheduler_ckpt}")
+                
+                optimizer.load_state_dict(torch.load(optim_ckpt))
+                scheduler.load_state_dict(torch.load(scheduler_ckpt))
                  
             print(f"Start Training ... total steps: {total_steps}")
             
@@ -393,14 +397,12 @@ def main(args):
                     writer = csv.writer(f)
                     writer.writerow(train_losses)
                     writer.writerow(train_accs)
-                    if not args.qa_stop_valid:
-                        writer.writerow(valid_accs)
+                    writer.writerow(valid_accs)
 
         if args.do_qa_test:
             results = []
             
             qa_model = AutoModelForQuestionAnswering.from_pretrained(args.qa_ckpt_dir / "model").to(device)
-            
             if (not args.do_qa_train) and args.qa_test_with_precheck:
                 print("Evaluating Dev Set for check...")
                 qa_dev_epoch("last", args, qa_model, dev_loader, optimizer, scheduler, device, tokenizer, max_seq_length, split_paragraphs, tokenized_paragraphs, ids, answers)
@@ -414,11 +416,7 @@ def main(args):
                     result = evaluate(data, output, tokenizer, device, max_seq_length, args.qa_doc_stride, split_paragraphs[TEST][i], tokenized_paragraphs[TEST][i].tokens)
                     results.append(result)
 
-            if args.specified_output_pred_path is None:
-                result_file = args.qa_pred_dir / f"test_qa_{args.qa_experiment_number}_mc_{args.mc_experiment_number}.csv"
-            else:
-                result_file = args.specified_output_pred_path
-
+            result_file = args.qa_pred_dir / f"test_qa_{args.qa_experiment_number}_mc_{args.mc_experiment_number}.csv"
             with open(result_file, 'w') as f:	
                 f.write("id,answer\n")
                 for i, result in enumerate(results):
@@ -474,13 +472,13 @@ def parse_args() -> Namespace:
     parser.add_argument("--mc_batch_size", type=int, default=1)
     parser.add_argument("--mc_accu_grad", type=int, default=8)
     parser.add_argument("--check_val_every_step", type=int, default=500)
-    parser.add_argument("--mc_warmup_ratio", type=float, default=0.1)
+    parser.add_argument("--mc_warmup_ratio", type=float, default=0.0)
     
     parser.add_argument("--num_workers", type=int, default=2)
 
     # qa
-    parser.add_argument("--qa_batch_size", type=int, default=2)
-    parser.add_argument("--qa_accu_grad", type=int, default=4)
+    parser.add_argument("--qa_batch_size", type=int, default=1)
+    parser.add_argument("--qa_accu_grad", type=int, default=8)
     parser.add_argument("--qa_max_question_len", type=int, default=40)
     parser.add_argument("--qa_doc_stride", type=int, default=150)
     parser.add_argument("--qa_warmup_ratio", type=float, default=0.1)
@@ -512,12 +510,6 @@ def parse_args() -> Namespace:
     parser.add_argument("--qa_test_with_precheck", action="store_true", help="Run or not.")
     
     parser.add_argument("--qa_make_csv", action="store_true", help="Run or not.")
-    parser.add_argument("--pipeline", action="store_true", help="Run or not.")
-
-    # For TA to run
-    parser.add_argument("--specified_context_path", type=str, default=None)
-    parser.add_argument("--specified_test_path", type=str, default=None) 
-    parser.add_argument("--specified_output_pred_path", type=str, default=None)
 
     args = parser.parse_args()
     return args
@@ -529,18 +521,16 @@ if __name__ == "__main__":
     args.mc_ckpt_dir = args.mc_ckpt_dir / str(args.mc_experiment_number)
     args.mc_ckpt_dir.mkdir(parents=True, exist_ok=True)
     
-    if not (args.pipeline and (args.do_qa_train or args.do_qa_test)):
-        args.mc_pred_dir.mkdir(parents=True, exist_ok=True)
-        args.mc_pred_dir = args.mc_pred_dir / str(args.mc_experiment_number)
-        args.mc_pred_dir.mkdir(parents=True, exist_ok=True)
+    args.mc_pred_dir.mkdir(parents=True, exist_ok=True)
+    args.mc_pred_dir = args.mc_pred_dir / str(args.mc_experiment_number)
+    args.mc_pred_dir.mkdir(parents=True, exist_ok=True)
 
     args.qa_ckpt_dir.mkdir(parents=True, exist_ok=True)
     args.qa_ckpt_dir = args.qa_ckpt_dir / str(args.qa_experiment_number)
     args.qa_ckpt_dir.mkdir(parents=True, exist_ok=True)
     
-    if args.specified_output_pred_path is None:
-        args.qa_pred_dir.mkdir(parents=True, exist_ok=True)
-        args.qa_pred_dir = args.qa_pred_dir / str(args.qa_experiment_number)
-        args.qa_pred_dir.mkdir(parents=True, exist_ok=True)
+    args.qa_pred_dir.mkdir(parents=True, exist_ok=True)
+    args.qa_pred_dir = args.qa_pred_dir / str(args.qa_experiment_number)
+    args.qa_pred_dir.mkdir(parents=True, exist_ok=True)
 
     main(args)

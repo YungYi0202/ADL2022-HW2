@@ -1,0 +1,12 @@
+python run.py \
+	--mc_experiment_number 11 \
+	--qa_experiment_number 8 \
+	--mc_pretrained_model_name_or_path ./mc_ckpt/11/checkpoint-final \
+	--qa_pretrained_model_name_or_path hfl/chinese-macbert-large \
+	--qa_resume \
+	--do_mc_test \
+	--do_qa_test \
+	--pipeline \
+	--specified_context_path ${1} \
+	--specified_test_path ${2} \
+	--specified_output_pred_path ${3} \

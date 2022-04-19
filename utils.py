@@ -31,7 +31,7 @@ def get_ending_names():
     return ending_names
 
 def swag_like_dataset(splits, questions, paragraphs, candidate_paragraph_ids, answers):
-    tmp_dict = {split: _swag_like_dataset(questions[split], paragraphs, candidate_paragraph_ids[split], (answers[split] if split in answers.keys() else None)) for split in splits}
+    tmp_dict = {split: _swag_like_dataset(questions[split], paragraphs, candidate_paragraph_ids[split], (answers[split] if split != TEST else None)) for split in splits}
     dataset = DatasetDict()
     # using your `Dict` object
     for k,v in tmp_dict.items():
@@ -146,12 +146,21 @@ def evaluate(data, output, tokenizer, device, max_seq_length, doc_stride, paragr
         answer = answer.replace('✔', ' ').replace('✦','\u200b').replace('☺','\u200e').replace('☆','\u3000').replace('●','#')
         print('final prediction:',answer)
     
-    if answer[0:3] == '「' and answer[-3:] == '」':
-        answer =  answer[3:-3]
-    elif answer[0:3] == "「" and answer.find("」") == -1 :
-        answer =  answer[3:]
-    elif answer[-3:] == "」" and answer.find("「") == -1:
-        answer =  answer[:-3]
+    
+
+    if answer[0:len('「')] == '「' and answer[-len('「'):] == '」': 
+        print(f'found 「」 in prediction, original text: {answer}')
+        if answer[:-len('「')].find("」") == -1:
+            answer =  answer[len('「'):-len('「')]
+            print('final prediction:',answer)
+    elif answer[0:len('「')] == "「" and answer.find("」") == -1 :
+        print(f'found 「」 in prediction, original text: {answer}')
+        answer =  answer[len('「'):]
+        print('final prediction:',answer)
+    elif answer[-len('「'):] == "」" and answer.find("「") == -1:
+        print(f'found 「」 in prediction, original text: {answer}')
+        answer =  answer[:-len('「')]
+        print('final prediction:',answer)
     
     return answer
 # ***** End - For QA ******
