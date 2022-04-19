@@ -1,4 +1,4 @@
-python run.py \
+python3.8 run.py \
 	--mc_experiment_number 11 \
 	--qa_experiment_number 8 \
 	--mc_pretrained_model_name_or_path ./mc_ckpt/11/checkpoint-final \
