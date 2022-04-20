@@ -124,14 +124,14 @@ def multiple_choice(args, device, splits, questions, candidate_paragraph_ids, re
     
     if args.do_mc_test:
         all_predictions = dict()
-        # for split in splits:
-        for split in [TEST]:
-            with open(args.mc_pred_dir / f"{split}.csv","a+") as f:
-                print(f"Predicting split {split}...")
-                predictions, _, _ = trainer.predict(test_dataset=tokenized_mc_data[split])
-                preds = np.argmax(predictions, axis=1)
-                all_predictions[split] = [ candidate_paragraph_ids[split][i][pred_label] for i, pred_label in enumerate(preds)]
-                if not (args.pipeline and (args.do_qa_train or args.do_qa_test)):
+        for split in splits:
+        # for split in [TEST]:
+            print(f"Predicting split {split}...")
+            predictions, _, _ = trainer.predict(test_dataset=tokenized_mc_data[split])
+            preds = np.argmax(predictions, axis=1)
+            all_predictions[split] = [ candidate_paragraph_ids[split][i][pred_label] for i, pred_label in enumerate(preds)]
+            if not (args.pipeline and (args.do_qa_train or args.do_qa_test)):
+                with open(args.mc_pred_dir / f"{split}.csv","a+") as f:    
                     writer = csv.writer(f)
                     for i, pred_label in enumerate(preds):
                         writer.writerow([ids[split][i], candidate_paragraph_ids[split][i][pred_label]])
