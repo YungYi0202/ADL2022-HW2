@@ -3,6 +3,8 @@ python3.8 run.py \
 	--qa_experiment_number 8 \
 	--mc_pretrained_model_name_or_path ./mc_ckpt/11/checkpoint-final \
 	--qa_pretrained_model_name_or_path hfl/chinese-macbert-large \
+	--mc_ckpt_dir ./mc_ckpt/ \
+	--qa_ckpt_dir ./qa_ckpt/ \
 	--qa_resume \
 	--do_mc_test \
 	--do_qa_test \
